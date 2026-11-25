@@ -404,6 +404,11 @@ body.has-rest-dock .app-shell {
   color: #111827;
 }
 
+.btn-amber:hover {
+  background: color-mix(in srgb, var(--amber) 90%, #000);
+  color: #111827;
+}
+
 .btn-ghost {
   background: transparent;
   border-color: transparent;
@@ -536,10 +541,11 @@ body.has-rest-dock .app-shell {
 
 .card-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 12px;
+  flex-wrap: wrap;
 }
 
 .card-title {
@@ -715,10 +721,27 @@ body.has-rest-dock .app-shell {
   transition: background-color 140ms ease, color 140ms ease;
 }
 
+.segmented.segmented-5 {
+  display: flex;
+  width: 100%;
+  padding: 3px;
+  gap: 3px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+
+.segmented.segmented-5::-webkit-scrollbar {
+  display: none;
+}
+
 .segmented.segmented-5 .seg-btn {
-  padding: 8px 12px;
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 6px 4px;
   font-size: 0.75rem;
   text-align: center;
+  white-space: nowrap;
 }
 
 .seg-btn:hover {
@@ -965,14 +988,22 @@ body.has-rest-dock .app-shell {
 
 .stepper-row {
   display: grid;
-  grid-template-columns: auto auto minmax(72px, 1fr) auto auto;
-  gap: 8px;
+  grid-template-columns: repeat(2, minmax(36px, auto)) minmax(64px, 1fr) repeat(2, minmax(36px, auto));
+  gap: 6px;
   align-items: center;
 }
 
 .stepper-row .tap-chip {
-  min-width: 44px;
-  padding: 8px;
+  min-width: 36px;
+  padding: 8px 4px;
+  font-size: 0.8125rem;
+}
+
+.stepper-row .num-input {
+  min-width: 0;
+  padding: 8px 4px;
+  font-size: 1.125rem;
+  text-align: center;
 }
 
 .tap-chips-row {
@@ -1172,12 +1203,13 @@ body.has-rest-dock .app-shell {
   display: flex;
   align-items: flex-end;
   justify-content: center;
-  padding: 12px;
+  padding: 0;
 }
 
 @media (min-width: 640px) {
   .modal-backdrop {
     align-items: center;
+    padding: 16px;
   }
 }
 
@@ -1192,12 +1224,35 @@ body.has-rest-dock .app-shell {
   overflow-y: auto;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 16px;
+  border-radius: 20px 20px 0 0;
+  border-bottom: 0;
+  padding: 14px 16px calc(24px + env(safe-area-inset-bottom));
   box-shadow: var(--shadow);
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.modal-sheet::before {
+  content: '';
+  display: block;
+  width: 40px;
+  height: 5px;
+  background: var(--border);
+  border-radius: 3px;
+  margin: 0 auto 4px;
+  flex-shrink: 0;
+}
+
+@media (min-width: 640px) {
+  .modal-sheet {
+    border-radius: var(--radius-lg);
+    border-bottom: 1px solid var(--border);
+    padding: 16px;
+  }
+  .modal-sheet::before {
+    display: none;
+  }
 }
 
 .divider {
@@ -1295,3 +1350,78 @@ body.has-rest-dock .app-shell {
   color: var(--danger);
   background: var(--danger-soft);
 }
+
+/* iOS Safari & Touch Device Optimizations */
+button, .btn, .tap-chip, .seg-btn, .nav-item, [role="button"] {
+  touch-action: manipulation;
+}
+
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+@media (max-width: 640px) {
+  /* Prevent iOS Safari 20% auto-zoom on input focus */
+  .text-input,
+  .select-input,
+  input[type="text"],
+  input[type="number"],
+  input[type="date"],
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+  .stepper-row .num-input {
+    font-size: 1.125rem !important; /* 18px */
+  }
+}
+
+@media (max-width: 520px) {
+  .card-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .card-header .segmented {
+    width: 100%;
+    display: flex;
+  }
+  .card-header .segmented .seg-btn {
+    flex: 1;
+    text-align: center;
+    padding: 8px 6px;
+  }
+  .form-grid-3 {
+    grid-template-columns: repeat(auto-fit, minmax(115px, 1fr));
+  }
+}
+
+@media (max-width: 480px) {
+  .header-actions {
+    gap: 6px;
+  }
+  #phase-pill-btn {
+    font-size: 0.75rem;
+    padding: 6px 10px;
+    min-height: 32px;
+  }
+  #theme-btn {
+    min-height: 32px;
+    padding: 4px 6px;
+  }
+  #install-btn {
+    font-size: 0.75rem;
+    padding: 6px 10px;
+    min-height: 32px;
+  }
+  .brand-title {
+    font-size: 1.0625rem;
+  }
+}
+

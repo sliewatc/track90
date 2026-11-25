@@ -687,7 +687,7 @@ function openPhaseModal() {
       </div>
       <span class="check-box">${bonusWk10Sets ? icon('check') : ''}</span>
     </button>
-    <div class="muted-sm">Active effective phase: <strong>${escapeHtml(PHASES[phase].label)}</strong></div>
+    <div class="muted-sm" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border-subtle);">Active effective phase: <strong>${escapeHtml(PHASES[phase].label)}</strong></div>
   `);
 }
 
@@ -719,7 +719,7 @@ function openSwapModal(workoutId, exId) {
       <div class="control-label-row"><span>Custom Swap (added to this slot)</span></div>
       <div class="row-between" style="gap:8px;">
         <input id="custom-swap-input" type="text" class="text-input" placeholder="e.g., Pendulum Squat" />
-        <button type="button" class="btn btn-primary" data-action="add-custom-swap" data-ex="${exId}">Use</button>
+        <button type="button" class="btn btn-primary" style="flex-shrink:0;min-width:64px;" data-action="add-custom-swap" data-ex="${exId}">Use</button>
       </div>
     </div>
   `);
@@ -3393,4 +3393,25 @@ document.getElementById('install-btn').addEventListener('click', async () => {
   document.getElementById('install-btn').style.display = 'none';
 });
 
+const urlParams = new URLSearchParams(window.location.search);
+const reqTab = urlParams.get('tab');
+if (reqTab && ['today', 'train', 'progress', 'plan'].includes(reqTab)) {
+  state.activeTab = reqTab;
+}
+
 renderMain();
+
+const reqModal = urlParams.get('modal');
+if (reqModal === 'phase') {
+  openPhaseModal();
+} else if (reqModal === 'swap') {
+  const wId = state.activeWorkoutId || 'upperA';
+  const ex = getWorkouts()[wId]?.exercises[0];
+  if (ex) openSwapModal(wId, ex.id);
+} else if (reqModal === 'plan-editor') {
+  openPlanEditorModal(state.activeWorkoutId || 'upperA');
+} else if (reqModal === 'settings') {
+  openWorkoutSettingsModal();
+} else if (reqModal === 'holiday') {
+  openHolidayModal();
+}
