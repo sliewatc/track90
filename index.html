@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#0c0c0e" id="meta-theme-color" />
+  <meta name="description" content="Personal 90-day body recomposition workout logger, calorie-cycling checklist, and strength progress tracker." />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Recomp 90D" />
+  <title>90-Day Recomp Tracker</title>
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="icon" type="image/svg+xml" href="./icons/icon.svg" />
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@500;600;700&family=Geist:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="top-header">
+      <div class="header-row">
+        <div>
+          <h1 class="brand-title">90-Day Recomp Tracker</h1>
+          <div class="brand-sub" id="header-meta">
+            <span>Day 1 / 90</span>
+            <span>•</span>
+            <span>Phase 1</span>
+          </div>
+        </div>
+        <div class="header-actions">
+          <button type="button" id="install-btn" class="btn btn-sm btn-primary" style="display:none;">Install</button>
+          <button type="button" id="phase-pill-btn" class="btn btn-sm" title="Switch Training Phase"></button>
+          <div class="theme-dropdown" id="theme-dropdown">
+            <button type="button" id="theme-btn" class="btn btn-sm theme-trigger" aria-haspopup="listbox" aria-expanded="false" aria-label="Color scheme"></button>
+            <div id="theme-menu" class="theme-menu hidden" role="listbox" aria-label="Color scheme options"></div>
+          </div>
+        </div>
+      </div>
+
+      <nav class="desktop-nav" aria-label="Primary navigation">
+        <button type="button" class="seg-btn seg-btn-primary nav-tab" data-tab="today" aria-selected="true">Today</button>
+        <button type="button" class="seg-btn seg-btn-primary nav-tab" data-tab="train" aria-selected="false">Train</button>
+        <button type="button" class="seg-btn seg-btn-primary nav-tab" data-tab="progress" aria-selected="false">Progress</button>
+        <button type="button" class="seg-btn seg-btn-primary nav-tab" data-tab="plan" aria-selected="false">Plan &amp; Backup</button>
+      </nav>
+    </header>
+
+    <main id="main-view" class="main-content" aria-live="polite"></main>
+  </div>
+
+  <!-- Persistent Rest Timer Dock -->
+  <aside id="rest-dock" class="rest-dock hidden" aria-label="Rest timer">
+    <div class="rest-dock-top">
+      <div>
+        <div class="muted-sm" id="rest-ex-name">Rest Timer</div>
+        <div class="rest-time tabular" id="rest-countdown">01:30</div>
+      </div>
+      <div class="row-wrap">
+        <button type="button" class="btn btn-sm" id="rest-alert-mode" title="Toggle rest alert sound/vibration">Chime</button>
+        <button type="button" class="btn btn-sm" id="rest-minus">-15s</button>
+        <button type="button" class="btn btn-sm" id="rest-plus">+15s</button>
+        <button type="button" class="btn btn-sm btn-amber" id="rest-toggle">Pause</button>
+        <button type="button" class="btn btn-sm btn-ghost" id="rest-stop">Done</button>
+      </div>
+    </div>
+    <div class="bar-track">
+      <div id="rest-progress-bar" class="bar-fill" style="transform: scaleX(1); background: var(--amber);"></div>
+    </div>
+  </aside>
+
+  <!-- Mobile Bottom Navigation -->
+  <nav class="bottom-nav" aria-label="Mobile navigation">
+    <button type="button" class="nav-item nav-tab" data-tab="today" aria-current="page">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+      <span>Today</span>
+    </button>
+    <button type="button" class="nav-item nav-tab" data-tab="train">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 6.5h11"/><path d="M6.5 17.5h11"/><path d="M4 10v4"/><path d="M20 10v4"/><path d="M7 7v10"/><path d="M17 7v10"/><line x1="10" y1="12" x2="14" y2="12"/></svg>
+      <span>Train</span>
+    </button>
+    <button type="button" class="nav-item nav-tab" data-tab="progress">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+      <span>Progress</span>
+    </button>
+    <button type="button" class="nav-item nav-tab" data-tab="plan">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+      <span>Plan</span>
+    </button>
+  </nav>
+
+  <!-- Modal Sheet -->
+  <div id="modal-backdrop" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-sheet">
+      <div class="row-between">
+        <h2 id="modal-title" class="card-title">Modal</h2>
+        <button type="button" id="modal-close" class="btn btn-sm btn-icon btn-ghost" aria-label="Close modal">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div id="modal-body"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden" role="status"></div>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
