@@ -153,6 +153,7 @@ let pendingUndoFn = null;
 let lastSavedBanner = null;
 let planEditorDraft = null;
 let showFullPlanDoc = false;
+let justCheckedTarget = null;
 
 let sharedAudioCtx = null;
 let chimeAudioEl = null;
@@ -173,6 +174,48 @@ function saveState() {
   }
 }
 
+let supportsDisplayTransitionCache;
+function canTransitionDisplay() {
+  if (supportsDisplayTransitionCache !== undefined) return supportsDisplayTransitionCache;
+  if (!window.CSS?.supports?.('transition-behavior', 'allow-discrete') || !document.body) {
+    return false;
+  }
+  const probe = document.createElement('div');
+  probe.style.cssText = 'transition: display 1s allow-discrete !important; display: block;';
+  document.body.appendChild(probe);
+  getComputedStyle(probe).display;
+  probe.style.display = 'none';
+  supportsDisplayTransitionCache = getComputedStyle(probe).display === 'block';
+  probe.remove();
+  return supportsDisplayTransitionCache;
+}
+
+function showAnimatedEl(el) {
+  if (!el) return;
+  el.removeAttribute('data-closing');
+  el.classList.remove('hidden');
+}
+
+async function hideAnimatedEl(el) {
+  if (!el || el.classList.contains('hidden') || el.hasAttribute('data-closing')) return;
+  if (canTransitionDisplay()) {
+    el.classList.add('hidden');
+    return;
+  }
+  el.setAttribute('data-closing', '');
+  const animations = typeof el.getAnimations === 'function' ? el.getAnimations({ subtree: true }) : [];
+  if (animations.length > 0) {
+    await Promise.race([
+      Promise.allSettled(animations.map((a) => a.finished)),
+      new Promise((r) => setTimeout(r, 350))
+    ]);
+  }
+  if (el.hasAttribute('data-closing')) {
+    el.removeAttribute('data-closing');
+    el.classList.add('hidden');
+  }
+}
+
 function showToast(msg, undoFn = null) {
   const el = document.getElementById('toast');
   if (!el) return;
@@ -180,10 +223,10 @@ function showToast(msg, undoFn = null) {
   el.innerHTML = pendingUndoFn
     ? `<span>${escapeHtml(msg)}</span><button type="button" class="toast-undo-btn" id="toast-undo-btn">Undo</button>`
     : `<span>${escapeHtml(msg)}</span>`;
-  el.classList.remove('hidden');
+  showAnimatedEl(el);
   clearTimeout(showToast._t);
   showToast._t = setTimeout(() => {
-    el.classList.add('hidden');
+    hideAnimatedEl(el);
     pendingUndoFn = null;
   }, pendingUndoFn ? 6500 : 2600);
 }
@@ -762,13 +805,12 @@ function renderRestDock() {
   const dock = document.getElementById('rest-dock');
   if (!dock) return;
   if (!timer.active) {
-    dock.classList.add('hidden');
-    dock.classList.remove('is-done', 'is-paused');
+    hideAnimatedEl(dock);
     document.body.classList.remove('has-rest-dock');
     return;
   }
   const isDone = timer.remainingSec <= 0;
-  dock.classList.remove('hidden');
+  showAnimatedEl(dock);
   dock.classList.toggle('is-done', isDone);
   dock.classList.toggle('is-paused', timer.paused && !isDone);
   document.body.classList.add('has-rest-dock');
@@ -851,7 +893,8 @@ function setThemeMenuOpen(open) {
   const menu = document.getElementById('theme-menu');
   const btn = document.getElementById('theme-btn');
   if (!menu || !btn) return;
-  menu.classList.toggle('hidden', !open);
+  if (open) showAnimatedEl(menu);
+  else hideAnimatedEl(menu);
   btn.setAttribute('aria-expanded', String(open));
 }
 
@@ -904,13 +947,13 @@ function openModal(title, html) {
   document.getElementById('modal-title').textContent = title;
   document.getElementById('modal-body').innerHTML = html;
   const backdrop = document.getElementById('modal-backdrop');
-  backdrop.classList.remove('hidden');
+  showAnimatedEl(backdrop);
   const sheet = backdrop.querySelector('.modal-sheet');
   if (sheet) sheet.scrollTop = 0;
 }
 
 function closeModal() {
-  document.getElementById('modal-backdrop').classList.add('hidden');
+  hideAnimatedEl(document.getElementById('modal-backdrop'));
 }
 
 function openPhaseModal() {
@@ -1344,8 +1387,9 @@ function renderTodayView() {
         <div class="check-list">
           ${NUTRITION.meals.map((m) => {
             const done = Boolean(log.meals[m.id]);
+            const justChecked = done && justCheckedTarget === `meal:${m.id}`;
             return `
-              <button type="button" class="check-row ${done ? 'done' : ''}" data-action="toggle-meal" data-id="${m.id}">
+              <button type="button" class="check-row ${done ? 'done' : ''} ${justChecked ? 'just-checked' : ''}" data-action="toggle-meal" data-id="${m.id}">
                 <div>
                   <div style="font-weight:700;font-size:0.875rem;">${escapeHtml(m.title)} · <span style="color:var(--primary);">${escapeHtml(m.target)}</span></div>
                   <div class="muted-sm">${escapeHtml(m.timing)} · ${escapeHtml(m.detail)}</div>
@@ -1367,8 +1411,9 @@ function renderTodayView() {
         <div class="check-list">
           ${NUTRITION.habits.map((h) => {
             const done = Boolean(log.habits[h.id]);
+            const justChecked = done && justCheckedTarget === `habit:${h.id}`;
             return `
-              <button type="button" class="check-row ${done ? 'done' : ''}" data-action="toggle-habit" data-id="${h.id}">
+              <button type="button" class="check-row ${done ? 'done' : ''} ${justChecked ? 'just-checked' : ''}" data-action="toggle-habit" data-id="${h.id}">
                 <div>
                   <div style="font-weight:600;font-size:0.875rem;">${escapeHtml(h.label)}</div>
                   <div class="muted-sm">${escapeHtml(h.meta)}</div>
@@ -1824,11 +1869,11 @@ function renderTrainView() {
         </div>
         ${prehabCollapsed ? '' : `
           <div class="grid-2" style="gap:8px;">
-            <button type="button" class="check-row ${draft.prehabDone.ext ? 'done' : ''}" data-action="toggle-prehab" data-key="ext">
+            <button type="button" class="check-row ${draft.prehabDone.ext ? 'done' : ''} ${draft.prehabDone.ext && justCheckedTarget === 'prehab:ext' ? 'just-checked' : ''}" data-action="toggle-prehab" data-key="ext">
               <span style="font-size:0.875rem;font-weight:600;">1–2 × 12–15/side External Rotations</span>
               <span class="check-box">${draft.prehabDone.ext ? icon('check') : ''}</span>
             </button>
-            <button type="button" class="check-row ${draft.prehabDone.pullapart ? 'done' : ''}" data-action="toggle-prehab" data-key="pullapart">
+            <button type="button" class="check-row ${draft.prehabDone.pullapart ? 'done' : ''} ${draft.prehabDone.pullapart && justCheckedTarget === 'prehab:pullapart' ? 'just-checked' : ''}" data-action="toggle-prehab" data-key="pullapart">
               <span style="font-size:0.875rem;font-weight:600;">15 Band Pull-Aparts</span>
               <span class="check-box">${draft.prehabDone.pullapart ? icon('check') : ''}</span>
             </button>
@@ -1865,7 +1910,7 @@ function renderTrainView() {
             ${icon('swap')} <span>${draft.conditioningSwapped ? 'Using Split Squats' : 'Swap to Split Squats'}</span>
           </button>
         </div>
-        <button type="button" class="check-row ${draft.conditioningDone ? 'done' : ''}" data-action="toggle-cond-done">
+        <button type="button" class="check-row ${draft.conditioningDone ? 'done' : ''} ${draft.conditioningDone && justCheckedTarget === 'cond' ? 'just-checked' : ''}" data-action="toggle-cond-done">
           <span style="font-size:0.875rem;font-weight:600;">
             ${draft.conditioningSwapped ? '2 × 8–10/leg DB Bulgarian Split Squats' : '15 min Incline Walk (10% @ 3.2 mph)'}
           </span>
@@ -2556,6 +2601,28 @@ function renderMain() {
   else if (state.activeTab === 'train') main.innerHTML = renderTrainView();
   else if (state.activeTab === 'progress') main.innerHTML = renderProgressView();
   else main.innerHTML = renderPlanView();
+  justCheckedTarget = null;
+}
+
+function prefersReducedMotion() {
+  return Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches);
+}
+
+function renderMainWithTransition({ focusMain = false, onSettled = null } = {}) {
+  const modalOpen = !document.getElementById('modal-backdrop')?.classList.contains('hidden');
+  if (!document.startViewTransition || modalOpen) {
+    renderMain();
+    if (focusMain) document.getElementById('main-view')?.focus({ preventScroll: true });
+    if (typeof onSettled === 'function') onSettled();
+    return;
+  }
+  const vt = document.startViewTransition(() => {
+    renderMain();
+  });
+  vt.finished.finally(() => {
+    if (focusMain) document.getElementById('main-view')?.focus({ preventScroll: true });
+    if (typeof onSettled === 'function') onSettled();
+  });
 }
 
 // ---------- Event Delegation ----------
@@ -2564,17 +2631,19 @@ document.addEventListener('click', (e) => {
     const fn = pendingUndoFn;
     pendingUndoFn = null;
     clearTimeout(showToast._t);
-    document.getElementById('toast')?.classList.add('hidden');
+    hideAnimatedEl(document.getElementById('toast'));
     if (fn) fn();
     return;
   }
 
   const navBtn = e.target.closest('.nav-tab');
   if (navBtn) {
-    if (navBtn.dataset.tab !== 'progress') lastSavedBanner = null;
-    state.activeTab = navBtn.dataset.tab;
+    const nextTab = navBtn.dataset.tab;
+    if (nextTab === state.activeTab) return;
+    if (nextTab !== 'progress') lastSavedBanner = null;
+    state.activeTab = nextTab;
     saveState();
-    renderMain();
+    renderMainWithTransition({ focusMain: true });
     return;
   }
 
@@ -2607,12 +2676,14 @@ document.addEventListener('click', (e) => {
     const log = ensureDailyLog(state.selectedDate);
     const id = target.dataset.id;
     log.meals[id] = !log.meals[id];
+    justCheckedTarget = log.meals[id] ? `meal:${id}` : null;
     saveState();
     renderMain();
   } else if (action === 'toggle-habit') {
     const log = ensureDailyLog(state.selectedDate);
     const id = target.dataset.id;
     log.habits[id] = !log.habits[id];
+    justCheckedTarget = log.habits[id] ? `habit:${id}` : null;
     saveState();
     renderMain();
   } else if (action === 'quick-daily') {
@@ -2627,11 +2698,11 @@ document.addEventListener('click', (e) => {
     state.activeWorkoutId = target.dataset.workout;
     state.activeTab = 'train';
     saveState();
-    renderMain();
+    renderMainWithTransition({ focusMain: true });
   } else if (action === 'go-progress') {
     state.activeTab = 'progress';
     saveState();
-    renderMain();
+    renderMainWithTransition({ focusMain: true });
   } else if (action === 'toggle-skip-weighin') {
     const log = ensureDailyLog(state.selectedDate);
     log.weighInSkipped = !log.weighInSkipped;
@@ -2675,15 +2746,16 @@ document.addEventListener('click', (e) => {
     openPhaseModal();
     renderMain();
   } else if (action === 'select-workout') {
+    if (state.activeWorkoutId === target.dataset.workout) return;
     state.activeWorkoutId = target.dataset.workout;
     saveState();
-    renderMain();
+    renderMainWithTransition();
   } else if (action === 'open-workout-settings') {
     openWorkoutSettingsModal();
   } else if (action === 'toggle-focus-mode') {
     state.trainFocusMode = !state.trainFocusMode;
     saveState();
-    renderMain();
+    renderMainWithTransition();
   } else if (action === 'test-chime') {
     unlockAudio();
     playTimerDoneFeedback({ forceChime: true, volume: 1.0 });
@@ -2708,13 +2780,13 @@ document.addEventListener('click', (e) => {
     const draft = ensureWorkoutDraft(state.activeWorkoutId);
     draft.activeExId = target.dataset.ex;
     saveState();
-    renderMain();
+    renderMainWithTransition();
   } else if (action === 'toggle-ramp-inline') {
     const draft = ensureWorkoutDraft(state.activeWorkoutId);
     const exId = target.dataset.ex;
     draft.rampOpen[exId] = !draft.rampOpen[exId];
     saveState();
-    renderMain();
+    renderMainWithTransition();
   } else if (action === 'toggle-ramp-set') {
     const draft = ensureWorkoutDraft(state.activeWorkoutId);
     const key = target.dataset.key;
@@ -2751,16 +2823,20 @@ document.addEventListener('click', (e) => {
     unlockAudio();
     const draft = ensureWorkoutDraft(state.activeWorkoutId);
     if (!draft.startedAt) draft.startedAt = Date.now();
+    const wasCollapsed = Boolean((draft.prehabDone.ext && draft.prehabDone.pullapart) || draft.prehabSkipped);
     const k = target.dataset.key;
     draft.prehabDone[k] = !draft.prehabDone[k];
     if (draft.prehabDone[k]) draft.prehabSkipped = false;
+    justCheckedTarget = draft.prehabDone[k] ? `prehab:${k}` : null;
+    const isCollapsed = Boolean((draft.prehabDone.ext && draft.prehabDone.pullapart) || draft.prehabSkipped);
     saveState();
-    renderMain();
+    if (wasCollapsed !== isCollapsed) renderMainWithTransition();
+    else renderMain();
   } else if (action === 'toggle-skip-prehab') {
     const draft = ensureWorkoutDraft(state.activeWorkoutId);
     draft.prehabSkipped = !draft.prehabSkipped;
     saveState();
-    renderMain();
+    renderMainWithTransition();
   } else if (action === 'toggle-cond-swap') {
     const draft = ensureWorkoutDraft(state.activeWorkoutId);
     draft.conditioningSwapped = !draft.conditioningSwapped;
@@ -2769,6 +2845,7 @@ document.addEventListener('click', (e) => {
   } else if (action === 'toggle-cond-done') {
     const draft = ensureWorkoutDraft(state.activeWorkoutId);
     draft.conditioningDone = !draft.conditioningDone;
+    justCheckedTarget = draft.conditioningDone ? 'cond' : null;
     saveState();
     renderMain();
   } else if (action === 'open-swap') {
@@ -3059,9 +3136,17 @@ document.addEventListener('click', (e) => {
       msgs.push(`Updated Set ${idx + 1}`);
     }
     if (msgs.length > 0) showToast(msgs.join(' · '));
-    renderMain();
     if (switchedExercise) {
-      document.querySelector('.exercise-card.is-active')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      renderMainWithTransition({
+        onSettled: () => {
+          document.querySelector('.exercise-card.is-active')?.scrollIntoView({
+            behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+            block: 'nearest'
+          });
+        }
+      });
+    } else {
+      renderMain();
     }
   } else if (action === 'undo-set') {
     const workoutId = state.activeWorkoutId;
@@ -3181,10 +3266,10 @@ document.addEventListener('click', (e) => {
       saveState();
       renderMain();
     });
-    renderMain();
+    renderMainWithTransition({ focusMain: true });
   } else if (action === 'dismiss-saved-banner') {
     lastSavedBanner = null;
-    renderMain();
+    renderMainWithTransition();
   } else if (action === 'nudge-quick-metric') {
     const metric = target.dataset.metric;
     const delta = Number(target.dataset.delta);
@@ -3276,7 +3361,7 @@ document.addEventListener('click', (e) => {
   } else if (action === 'toggle-history-expand') {
     const id = target.dataset.id;
     expandedHistoryId = expandedHistoryId === id ? null : id;
-    renderMain();
+    renderMainWithTransition();
   } else if (action === 'open-edit-history-set') {
     const id = target.dataset.id;
     const exIdx = Number(target.dataset.exidx);
@@ -3397,7 +3482,7 @@ document.addEventListener('click', (e) => {
       saveState();
       renderMain();
     });
-    renderMain();
+    renderMainWithTransition({ focusMain: true });
   } else if (action === 'delete-history-set') {
     const id = target.dataset.id;
     const exIdx = Number(target.dataset.exidx);
@@ -3457,7 +3542,7 @@ document.addEventListener('click', (e) => {
     renderMain();
   } else if (action === 'toggle-full-plan') {
     showFullPlanDoc = !showFullPlanDoc;
-    renderMain();
+    renderMainWithTransition();
   } else if (action === 'copy-plan-md') {
     if (navigator.clipboard?.writeText) {
       navigator.clipboard.writeText(FULL_PLAN_MARKDOWN)
@@ -3617,7 +3702,8 @@ document.addEventListener('change', (e) => {
 document.getElementById('theme-btn').addEventListener('click', (e) => {
   e.stopPropagation();
   const menu = document.getElementById('theme-menu');
-  setThemeMenuOpen(menu.classList.contains('hidden'));
+  const isClosed = menu.classList.contains('hidden') || menu.hasAttribute('data-closing');
+  setThemeMenuOpen(isClosed);
 });
 document.getElementById('theme-menu').addEventListener('click', (e) => {
   const opt = e.target.closest('[data-theme-option]');

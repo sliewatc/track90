@@ -302,6 +302,7 @@ body.has-rest-dock .app-shell {
   background: var(--bg);
   border-bottom: 1px solid var(--border-subtle);
   padding: calc(12px + env(safe-area-inset-top)) 16px 12px;
+  view-transition-name: app-header;
 }
 
 .header-row {
@@ -461,6 +462,33 @@ body.has-rest-dock .app-shell {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 8px;
+  transform-origin: top right;
+  opacity: 1;
+  translate: 0 0;
+  scale: 1;
+  transition:
+    opacity 160ms cubic-bezier(0.16, 1, 0.3, 1),
+    translate 160ms cubic-bezier(0.16, 1, 0.3, 1),
+    scale 160ms cubic-bezier(0.16, 1, 0.3, 1),
+    display 160ms;
+  transition-behavior: allow-discrete;
+}
+
+@starting-style {
+  .theme-menu {
+    opacity: 0;
+    translate: 0 -6px;
+    scale: 0.96;
+  }
+}
+
+.theme-menu:where(.hidden, [data-closing]) {
+  opacity: 0;
+  translate: 0 -4px;
+  scale: 0.97;
+  transition-duration: 110ms;
+  transition-timing-function: cubic-bezier(0.4, 0, 1, 1);
+  pointer-events: none;
 }
 
 .theme-menu.hidden {
@@ -531,6 +559,11 @@ body.has-rest-dock .app-shell {
   display: flex;
   flex-direction: column;
   gap: 20px;
+  view-transition-name: main-view;
+}
+
+.main-content:focus:not(:focus-visible) {
+  outline: none;
 }
 
 .card {
@@ -806,11 +839,28 @@ body.has-rest-dock .app-shell {
   justify-content: center;
   flex-shrink: 0;
   color: var(--primary-fg);
+  transition: background-color 150ms ease, border-color 150ms ease;
 }
 
 .check-row.done .check-box {
   background: var(--primary);
   border-color: var(--primary);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes checkPop {
+    from {
+      opacity: 0;
+      transform: scale(0.72);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+  .check-row.just-checked .check-box svg {
+    animation: checkPop 170ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
 }
 
 /* GPU-composited Progress Bars */
@@ -829,7 +879,7 @@ body.has-rest-dock .app-shell {
   background: var(--primary);
   border-radius: var(--radius-sm);
   transform-origin: left center;
-  transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: transform 260ms cubic-bezier(0.16, 1, 0.3, 1), background-color 200ms ease;
 }
 
 /* Mid-Workout Cards & Flat Hairline Logger Section */
@@ -841,6 +891,7 @@ body.has-rest-dock .app-shell {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  transition: border-color 180ms ease;
 }
 
 .exercise-card.is-active {
@@ -861,6 +912,11 @@ body.has-rest-dock .app-shell {
   justify-content: space-between;
   gap: 12px;
   cursor: pointer;
+  transition: border-color 140ms ease, background-color 140ms ease, transform 100ms ease;
+}
+
+.exercise-compact:active {
+  transform: scale(0.99);
 }
 
 .exercise-compact:hover {
@@ -1115,8 +1171,9 @@ body.has-rest-dock .app-shell {
 /* Floating Solid Rest Timer Dock */
 .rest-dock {
   position: fixed;
-  left: 50%;
-  transform: translateX(-50%);
+  left: 0;
+  right: 0;
+  margin-inline: auto;
   bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 10px);
   width: calc(100% - 24px);
   max-width: 560px;
@@ -1129,7 +1186,34 @@ body.has-rest-dock .app-shell {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  transition: border-color 180ms ease;
+  view-transition-name: app-rest-dock;
+  opacity: 1;
+  translate: 0 0;
+  scale: 1;
+  transition:
+    opacity 240ms cubic-bezier(0.16, 1, 0.3, 1),
+    translate 240ms cubic-bezier(0.16, 1, 0.3, 1),
+    scale 240ms cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 200ms ease,
+    display 240ms;
+  transition-behavior: allow-discrete;
+}
+
+@starting-style {
+  .rest-dock {
+    opacity: 0;
+    translate: 0 22px;
+    scale: 0.98;
+  }
+}
+
+.rest-dock:where(.hidden, [data-closing]) {
+  opacity: 0;
+  translate: 0 18px;
+  scale: 0.98;
+  transition-duration: 160ms;
+  transition-timing-function: cubic-bezier(0.4, 0, 1, 1);
+  pointer-events: none;
 }
 
 .rest-dock.is-done {
@@ -1227,6 +1311,7 @@ body.has-rest-dock .app-shell {
   border-top: 1px solid var(--border);
   display: grid;
   grid-template-columns: repeat(4, 1fr);
+  view-transition-name: app-bottom-nav;
 }
 
 .nav-item {
@@ -1259,13 +1344,42 @@ body.has-rest-dock .app-shell {
   position: fixed;
   inset: 0;
   z-index: 50;
-  background: rgba(0, 0, 0, 0.62);
+  background: transparent;
   display: flex;
   align-items: flex-end;
   justify-content: center;
   padding: 0;
   overflow: hidden;
   overscroll-behavior: contain;
+  transition: display 210ms;
+  transition-behavior: allow-discrete;
+}
+
+.modal-backdrop::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.62);
+  opacity: 1;
+  pointer-events: none;
+  transition: opacity 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@starting-style {
+  .modal-backdrop::before {
+    opacity: 0;
+  }
+}
+
+.modal-backdrop:where(.hidden, [data-closing]) {
+  transition-duration: 150ms;
+  pointer-events: none;
+}
+
+.modal-backdrop:where(.hidden, [data-closing])::before {
+  opacity: 0;
+  transition-duration: 150ms;
+  transition-timing-function: cubic-bezier(0.4, 0, 1, 1);
 }
 
 @media (min-width: 640px) {
@@ -1280,6 +1394,8 @@ body.has-rest-dock .app-shell {
 }
 
 .modal-sheet {
+  position: relative;
+  z-index: 1;
   width: 100%;
   max-width: 520px;
   max-height: 86dvh;
@@ -1295,6 +1411,27 @@ body.has-rest-dock .app-shell {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  opacity: 1;
+  translate: 0 0;
+  scale: 1;
+  transition:
+    opacity 210ms cubic-bezier(0.22, 1, 0.36, 1),
+    translate 210ms cubic-bezier(0.22, 1, 0.36, 1),
+    scale 210ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@starting-style {
+  .modal-backdrop .modal-sheet {
+    opacity: 0;
+    translate: 0 24px;
+  }
+}
+
+.modal-backdrop:where(.hidden, [data-closing]) .modal-sheet {
+  opacity: 0;
+  translate: 0 20px;
+  transition-duration: 150ms;
+  transition-timing-function: cubic-bezier(0.4, 0, 1, 1);
 }
 
 .modal-sheet::before {
@@ -1353,8 +1490,10 @@ body.has-rest-dock .app-shell {
 .toast {
   position: fixed;
   top: calc(12px + env(safe-area-inset-top));
-  left: 50%;
-  transform: translateX(-50%);
+  left: 0;
+  right: 0;
+  margin-inline: auto;
+  width: fit-content;
   z-index: 60;
   background: var(--surface-3);
   color: var(--text);
@@ -1369,6 +1508,29 @@ body.has-rest-dock .app-shell {
   gap: 12px;
   max-width: calc(100% - 24px);
   pointer-events: auto;
+  view-transition-name: app-toast;
+  opacity: 1;
+  translate: 0 0;
+  transition:
+    opacity 200ms cubic-bezier(0.16, 1, 0.3, 1),
+    translate 200ms cubic-bezier(0.16, 1, 0.3, 1),
+    display 200ms;
+  transition-behavior: allow-discrete;
+}
+
+@starting-style {
+  .toast {
+    opacity: 0;
+    translate: 0 -10px;
+  }
+}
+
+.toast:where(.hidden, [data-closing]) {
+  opacity: 0;
+  translate: 0 -8px;
+  transition-duration: 140ms;
+  transition-timing-function: cubic-bezier(0.4, 0, 1, 1);
+  pointer-events: none;
 }
 
 .toast.hidden {
@@ -1497,4 +1659,153 @@ input[type="number"] {
     font-size: 1.0625rem;
   }
 }
+
+/* Same-Document View Transitions (Operate Mode: crisp, fast continuity) */
+@keyframes viewFadeOut {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes viewFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes viewSettleY {
+  from {
+    transform: translateY(6px);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+/* Keep pinned chrome rock-steady with a single opaque snapshot (prevents plus-lighter double exposure) */
+::view-transition-group(root),
+::view-transition-group(app-header),
+::view-transition-group(app-bottom-nav),
+::view-transition-group(app-rest-dock),
+::view-transition-group(app-toast),
+::view-transition-group(main-view) {
+  animation: none;
+}
+
+::view-transition-old(root),
+::view-transition-old(app-header),
+::view-transition-old(app-bottom-nav),
+::view-transition-old(app-rest-dock),
+::view-transition-old(app-toast) {
+  display: none;
+}
+
+::view-transition-new(root),
+::view-transition-new(app-header),
+::view-transition-new(app-bottom-nav),
+::view-transition-new(app-rest-dock),
+::view-transition-new(app-toast) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+/* Matched 180ms linear cross-fade (opacity sum === 1.0) with plus-lighter inside isolated pair (zero brightness dip) */
+::view-transition-image-pair(main-view) {
+  isolation: isolate;
+}
+
+::view-transition-old(main-view),
+::view-transition-new(main-view) {
+  height: auto;
+  width: 100%;
+  mix-blend-mode: plus-lighter;
+}
+
+::view-transition-old(main-view) {
+  animation: viewFadeOut 180ms linear both;
+}
+
+::view-transition-new(main-view) {
+  animation: viewFadeIn 180ms linear both;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  ::view-transition-new(main-view) {
+    animation:
+      viewFadeIn 180ms linear both,
+      viewSettleY 200ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+}
+
+/* Reduced Motion: strip spatial movement while keeping clear state & opacity feedback */
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(main-view) {
+    animation: viewFadeOut 100ms linear both;
+  }
+
+  ::view-transition-new(main-view) {
+    animation: viewFadeIn 100ms linear both;
+  }
+
+  .btn,
+  .seg-btn,
+  .tap-chip,
+  .theme-option,
+  .check-row,
+  .check-box,
+  .exercise-card,
+  .exercise-compact,
+  .bar-fill,
+  [data-theme="pastel"] .tap-chip,
+  [data-theme="pastel"] .btn {
+    transition-duration: 80ms;
+  }
+
+  .modal-backdrop,
+  .modal-backdrop::before,
+  .modal-sheet,
+  .rest-dock,
+  .toast,
+  .theme-menu {
+    translate: none;
+    scale: none;
+    transition-duration: 110ms;
+  }
+
+  @starting-style {
+    .modal-backdrop .modal-sheet,
+    .rest-dock,
+    .toast,
+    .theme-menu {
+      translate: none;
+      scale: none;
+    }
+  }
+
+  .modal-backdrop:where(.hidden, [data-closing]),
+  .modal-backdrop:where(.hidden, [data-closing])::before,
+  .modal-backdrop:where(.hidden, [data-closing]) .modal-sheet,
+  .rest-dock:where(.hidden, [data-closing]),
+  .toast:where(.hidden, [data-closing]),
+  .theme-menu:where(.hidden, [data-closing]) {
+    translate: none;
+    scale: none;
+    transition-duration: 90ms;
+  }
+
+  .btn:active,
+  .tap-chip:active,
+  .check-row:active,
+  .exercise-compact:active,
+  .theme-option:active {
+    transform: none;
+  }
+}
+
 
