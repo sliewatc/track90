@@ -277,7 +277,7 @@ export const WORKOUTS = {
         bonusWk10Set: true,
         defaultWeight: 50,
         note: 'Single-Rope, V-Bar, or Single-Arm Cross-Body. NO skullcrushers.',
-        swaps: ['Cable Tricep Pushdown (Rope/V-Bar)', 'Single-Arm Cross-Body Cable Pushdown']
+        swaps: ['Cable Tricep Pushdown', 'Single-Arm Cross-Body Cable Pushdown', 'Overhead Cable Tricep Extension']
       },
       {
         id: 'ua_hammer',
@@ -349,7 +349,7 @@ export const WORKOUTS = {
         bonusWk10Set: false,
         defaultWeight: 185,
         note: 'Use lifting straps so grip never limits hamstring tension.',
-        swaps: ['Romanian Deadlift (Barbell)', 'Dumbbell RDL', '45° Weighted Back Extension', 'Cable Pull-Through']
+        swaps: ['Romanian Deadlift (BB or DB)', 'Dumbbell RDL', '45° Weighted Back Extension', 'Cable Pull-Through']
       },
       {
         id: 'la_legpress',
@@ -719,7 +719,7 @@ export const WORKOUTS = {
         bonusWk10Set: false,
         defaultWeight: 135,
         note: 'Superset A1.',
-        swaps: ['Standing Calf Raise', 'Leg-Press Calf Raise', 'Smith Machine Calf Raise']
+        swaps: ['Standing or Leg-Press Calf Raise', 'Standing Calf Raise', 'Leg-Press Calf Raise', 'Smith Machine Calf Raise']
       },
       {
         id: 'lb_crunch',

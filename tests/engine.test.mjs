@@ -25,7 +25,12 @@ import {
   createPlanVersionSnapshot,
   buildPlanVersionsExport,
   validateBackupState,
-  normalizeRestoredState
+  normalizeRestoredState,
+  createDefaultRestTimerState,
+  normalizeRestTimerState,
+  computeRestTimerTick,
+  adjustRestTimerState,
+  toggleRestTimerPauseState
 } from '../engine.js';
 
 test('workout structure covers all 5 days without skullcrushers', () => {
@@ -445,4 +450,75 @@ test('swapped non-barbell exercise uses +5 lb compound step instead of +10 lb ba
   );
   assert.equal(prog.increment, 5);
   assert.equal(prog.nextWeight, 145);
+});
+
+test('every default exercise name matches its swaps[0] to prevent duplicate swap modal options', () => {
+  for (const w of Object.values(WORKOUTS)) {
+    for (const ex of w.exercises) {
+      assert.equal(ex.swaps[0], ex.name, `Expected ${ex.id} swaps[0] to match exercise name`);
+    }
+  }
+});
+
+test('rest timer state machine handles reload hydration, -15s completion, pause/adjust, and restart cleanly', () => {
+  const t0 = 1_700_000_000_000;
+  const running = {
+    active: true,
+    paused: false,
+    completed: false,
+    remainingSec: 90,
+    totalSec: 90,
+    endAtMs: t0 + 90_000,
+    label: 'Flat Barbell Bench Press'
+  };
+
+  // Normal tick midway through rest
+  const mid = computeRestTimerTick(running, t0 + 30_000);
+  assert.equal(mid.justCompleted, false);
+  assert.equal(mid.state.remainingSec, 60);
+
+  // Reaching 0 completes cleanly and pauses
+  const done = computeRestTimerTick(mid.state, t0 + 90_500);
+  assert.equal(done.justCompleted, true);
+  assert.equal(done.staleCompletion, false);
+  assert.equal(done.state.remainingSec, 0);
+  assert.equal(done.state.paused, true);
+  assert.equal(done.state.completed, true);
+
+  // Returning >2 minutes late suppresses startling stale chime while marking completed
+  const stale = computeRestTimerTick(running, t0 + 90_000 + 180_000);
+  assert.equal(stale.justCompleted, true);
+  assert.equal(stale.staleCompletion, true);
+
+  // Adjusting -15s down to 0 while running finishes immediately
+  const nearEnd = { ...running, remainingSec: 10, endAtMs: t0 + 10_000 };
+  const minusToZero = adjustRestTimerState(nearEnd, -15, t0);
+  assert.equal(minusToZero.justCompleted, true);
+  assert.equal(minusToZero.state.remainingSec, 0);
+  assert.equal(minusToZero.state.paused, true);
+  assert.equal(minusToZero.state.completed, true);
+
+  // Adjusting +15s while paused mid-rest preserves paused state without auto-resuming
+  const pausedMid = toggleRestTimerPauseState(running, t0 + 30_000);
+  assert.equal(pausedMid.paused, true);
+  assert.equal(pausedMid.remainingSec, 60);
+  const pausedPlus = adjustRestTimerState(pausedMid, 15, t0 + 35_000);
+  assert.equal(pausedPlus.state.paused, true);
+  assert.equal(pausedPlus.state.remainingSec, 75);
+
+  // Adjusting +15s from GO! auto-resumes for 15s
+  const addedFromDone = adjustRestTimerState(done.state, 15, t0 + 95_000);
+  assert.equal(addedFromDone.state.paused, false);
+  assert.equal(addedFromDone.state.completed, false);
+  assert.equal(addedFromDone.state.remainingSec, 15);
+
+  // Toggling from GO! restarts full totalSec
+  const restarted = toggleRestTimerPauseState(done.state, t0 + 100_000);
+  assert.equal(restarted.paused, false);
+  assert.equal(restarted.remainingSec, 90);
+  assert.equal(restarted.endAtMs, t0 + 190_000);
+
+  // Reloading drops timers expired >4 hours ago
+  const ancient = normalizeRestTimerState({ ...running, endAtMs: t0 - 5 * 3600 * 1000 }, t0);
+  assert.deepEqual(ancient, createDefaultRestTimerState());
 });

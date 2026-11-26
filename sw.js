@@ -1,4 +1,4 @@
-const CACHE_NAME = 'recomp-90d-v14';
+const CACHE_NAME = 'recomp-90d-v15';
 const ASSETS = [
   './',
   './index.html',
@@ -38,18 +38,32 @@ self.addEventListener('fetch', (event) => {
     );
     return;
   }
+
+  const isIconAsset = url.pathname.includes('/icons/');
+  if (isIconAsset) {
+    event.respondWith(
+      caches.match(event.request).then((cached) => cached || fetch(event.request).then((response) => {
+        if (response && response.status === 200) {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+        }
+        return response;
+      }))
+    );
+    return;
+  }
+
+  // Network-first for app shell (HTML/JS/CSS/manifest) so iOS PWAs receive fixes immediately when online,
+  // while falling back instantaneously to cache when offline in gym dead zones.
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      const networkFetch = fetch(event.request)
-        .then((response) => {
-          if (response && response.status === 200) {
-            const copy = response.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
-          }
-          return response;
-        })
-        .catch(() => cached);
-      return cached || networkFetch;
-    })
+    fetch(event.request)
+      .then((response) => {
+        if (response && response.status === 200) {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+        }
+        return response;
+      })
+      .catch(() => caches.match(event.request))
   );
 });

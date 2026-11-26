@@ -26,7 +26,12 @@ import {
   createPlanVersionSnapshot,
   buildPlanVersionsExport,
   validateBackupState,
-  normalizeRestoredState
+  normalizeRestoredState,
+  createDefaultRestTimerState,
+  normalizeRestTimerState,
+  computeRestTimerTick,
+  adjustRestTimerState,
+  toggleRestTimerPauseState
 } from './engine.js';
 
 const STORAGE_KEY = 'recomp_90d_tracker_v1';
@@ -40,7 +45,9 @@ const ICONS = {
   chevronRight: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>',
   close: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
   arrowRight: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>',
-  sliders: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>'
+  sliders: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>',
+  volumeOn: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>',
+  volumeOff: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="22" y1="9" x2="16" y2="15"/><line x1="16" y1="9" x2="22" y2="15"/></svg>'
 };
 
 function icon(name) {
@@ -102,6 +109,7 @@ function createInitialState() {
     swapsBySlot: {},
     lastPerformance: {},
     draftWorkouts: {},
+    activeRestTimer: createDefaultRestTimerState(),
     workoutHistory: [],
     weightLogs: [{ date: PLAN_CONFIG.startDate, weight: PLAN_CONFIG.profile.startWeight }],
     waistLogs: [],
@@ -147,17 +155,15 @@ let planEditorDraft = null;
 let showFullPlanDoc = false;
 
 let sharedAudioCtx = null;
+let chimeAudioEl = null;
+let chimeAudioUnlocked = false;
+let chimeWavUrl = null;
+let silentWavUrl = null;
+let audioSessionResetTimer = null;
 let wakeLockSentinel = null;
 
-const timer = {
-  active: false,
-  paused: false,
-  remainingSec: 0,
-  totalSec: 90,
-  endAtMs: 0,
-  label: '',
-  intervalId: null
-};
+let timer = normalizeRestTimerState(state.activeRestTimer);
+let timerIntervalId = null;
 
 function saveState() {
   try {
@@ -315,6 +321,10 @@ function ensureWorkoutDraft(workoutId) {
       draft.activeSetIdxByEx[ex.id] = firstPending >= 0 ? firstPending : 0;
     }
   }
+  if (draft.activeExId && !workout.exercises.some((e) => e.id === draft.activeExId)) {
+    const firstPendingEx = workout.exercises.find((e) => (draft.sets[e.id] || []).some((s) => !s.done));
+    draft.activeExId = firstPendingEx?.id || workout.exercises[0]?.id || null;
+  }
   return draft;
 }
 
@@ -355,8 +365,8 @@ function advanceFocusAfterSetLogged(workoutId, exId, loggedSetIdx) {
       if (partnerAny >= 0) {
         draft.activeExId = partner.id;
         draft.activeSetIdxByEx[partner.id] = partnerAny;
-        // If we just finished *1 (e.g. A1/B1) and partner *2 still had that matching set pending, skip rest timer to go straight to *2
-        if (currentEx.superset.endsWith('1') && !partnerSets[loggedSetIdx]?.done) {
+        // If partner still has that matching set pending (whether user started with *1 or *2), skip rest and go straight to partner
+        if (loggedSetIdx < partnerSets.length && !partnerSets[loggedSetIdx]?.done) {
           supersetMovedToPartner = true;
           partnerDisplayName = state.swapsBySlot[partner.id] || partner.name;
         }
@@ -380,10 +390,107 @@ function advanceFocusAfterSetLogged(workoutId, exId, loggedSetIdx) {
   return { supersetMovedToPartner: false, partnerDisplayName: '' };
 }
 
-// ---------- Wake Lock, Earbud Audio & Timestamp Rest Timer ----------
+// ---------- Wake Lock, iOS Music-Safe Audio & Persistent Rest Timer ----------
+function supportsVibration() {
+  return typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function';
+}
+
+function isChimeEnabled() {
+  return state.restAlertMode === 'chime' || state.restAlertMode === 'chime_only';
+}
+
+function isVibeEnabled() {
+  return supportsVibration() && (state.restAlertMode === 'chime' || state.restAlertMode === 'vibe');
+}
+
+function setAudioSessionType(type) {
+  try {
+    if ('audioSession' in navigator && navigator.audioSession) {
+      navigator.audioSession.type = type;
+    }
+  } catch {
+    // Ignore unsupported audioSession types
+  }
+}
+
+function encodeMonoWavBlobUrl(samples, sampleRate = 22050) {
+  const numSamples = samples.length;
+  const buffer = new ArrayBuffer(44 + numSamples * 2);
+  const view = new DataView(buffer);
+  const writeStr = (offset, str) => {
+    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+  };
+  writeStr(0, 'RIFF');
+  view.setUint32(4, 36 + numSamples * 2, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, 1, true); // Mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeStr(36, 'data');
+  view.setUint32(40, numSamples * 2, true);
+  for (let i = 0; i < numSamples; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return URL.createObjectURL(new Blob([buffer], { type: 'audio/wav' }));
+}
+
+function getChimeWavUrl() {
+  if (chimeWavUrl) return chimeWavUrl;
+  const sampleRate = 22050;
+  const durationSec = 0.85;
+  const totalSamples = Math.floor(sampleRate * durationSec);
+  const samples = new Float32Array(totalSamples);
+  // Crisp, pleasant two-note gym bell (G5 -> C6) with smooth attack and harmonic clarity to cut through music
+  const notes = [
+    { start: 0.0, dur: 0.36, freq: 783.99, amp: 0.56 },
+    { start: 0.18, dur: 0.62, freq: 1046.5, amp: 0.68 }
+  ];
+  for (const n of notes) {
+    const startIdx = Math.floor(n.start * sampleRate);
+    const endIdx = Math.min(totalSamples, Math.floor((n.start + n.dur) * sampleRate));
+    for (let i = startIdx; i < endIdx; i++) {
+      const t = (i - startIdx) / sampleRate;
+      const attack = Math.min(1, t / 0.008);
+      const decay = Math.exp(-t * 6.2);
+      const env = attack * decay;
+      const fundamental = Math.sin(2 * Math.PI * n.freq * t);
+      const second = 0.28 * Math.sin(2 * Math.PI * n.freq * 2 * t) * Math.exp(-t * 8);
+      const third = 0.1 * Math.sin(2 * Math.PI * n.freq * 3 * t) * Math.exp(-t * 12);
+      samples[i] += n.amp * env * (fundamental + second + third);
+    }
+  }
+  // Normalize cleanly to -1.5 dB peak with zero clipping
+  let peak = 0;
+  for (let i = 0; i < totalSamples; i++) {
+    const a = Math.abs(samples[i]);
+    if (a > peak) peak = a;
+  }
+  if (peak > 0.001) {
+    const scale = 0.84 / peak;
+    for (let i = 0; i < totalSamples; i++) samples[i] *= scale;
+  }
+  chimeWavUrl = encodeMonoWavBlobUrl(samples, sampleRate);
+  return chimeWavUrl;
+}
+
+function getSilentWavUrl() {
+  if (silentWavUrl) return silentWavUrl;
+  const samples = new Float32Array(Math.floor(22050 * 0.04));
+  silentWavUrl = encodeMonoWavBlobUrl(samples, 22050);
+  return silentWavUrl;
+}
+
 async function syncWakeLock() {
   if (!('wakeLock' in navigator)) return;
-  const shouldKeepAwake = state.keepAwake && state.activeTab === 'train' && document.visibilityState === 'visible';
+  const shouldKeepAwake = state.keepAwake
+    && (state.activeTab === 'train' || (timer.active && !timer.paused))
+    && document.visibilityState === 'visible';
   if (shouldKeepAwake && !wakeLockSentinel) {
     try {
       wakeLockSentinel = await navigator.wakeLock.request('screen');
@@ -405,112 +512,224 @@ async function syncWakeLock() {
 
 function unlockAudio() {
   try {
-    if ('audioSession' in navigator) {
-      navigator.audioSession.type = 'ambient';
-    }
+    setAudioSessionType('ambient');
     const Ctx = window.AudioContext || window.webkitAudioContext;
-    if (!Ctx) return;
-    if (!sharedAudioCtx) sharedAudioCtx = new Ctx();
-    if (sharedAudioCtx.state === 'suspended') {
-      sharedAudioCtx.resume().catch(() => {});
+    if (Ctx) {
+      if (!sharedAudioCtx) sharedAudioCtx = new Ctx();
+      if (sharedAudioCtx.state === 'suspended') {
+        sharedAudioCtx.resume().catch(() => {});
+      }
+    }
+    if (!chimeAudioEl) {
+      chimeAudioEl = new Audio();
+      chimeAudioEl.playsInline = true;
+      chimeAudioEl.preload = 'auto';
+    }
+    if (!chimeAudioUnlocked) {
+      // Play a 40ms silent WAV under 'ambient' session during user gesture so iOS Safari unlocks
+      // unmuted <audio> playback without pausing or ducking Spotify / Apple Music.
+      chimeAudioEl.src = getSilentWavUrl();
+      chimeAudioEl.volume = 0.01;
+      const p = chimeAudioEl.play();
+      if (p && typeof p.then === 'function') {
+        p.then(() => {
+          chimeAudioEl.pause();
+          chimeAudioEl.src = getChimeWavUrl();
+          chimeAudioEl.volume = 1;
+          chimeAudioEl.load();
+          chimeAudioUnlocked = true;
+        }).catch(() => {
+          chimeAudioEl.src = getChimeWavUrl();
+          chimeAudioEl.volume = 1;
+        });
+      }
     }
   } catch {
     // Ignore
   }
 }
 
-function playTimerDoneFeedback() {
-  if ((state.restAlertMode === 'chime' || state.restAlertMode === 'vibe') && navigator.vibrate) {
-    navigator.vibrate([160, 80, 160, 80, 240]);
+async function playWebAudioChime(volume = 1.0) {
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return;
+  if (!sharedAudioCtx) sharedAudioCtx = new Ctx();
+  if (sharedAudioCtx.state === 'suspended') {
+    await sharedAudioCtx.resume();
   }
-  if (state.restAlertMode !== 'chime' && state.restAlertMode !== 'chime_only') return;
-  try {
-    if ('audioSession' in navigator) {
-      navigator.audioSession.type = 'ambient';
+  const ctx = sharedAudioCtx;
+  const baseVol = Math.max(0.1, Math.min(1, volume)) * 0.52;
+  [783.99, 1046.5].forEach((freq, i) => {
+    const osc = ctx.createOscillator();
+    const harm = ctx.createOscillator();
+    const gain = ctx.createGain();
+    const harmGain = ctx.createGain();
+    osc.type = 'sine';
+    harm.type = 'sine';
+    osc.frequency.value = freq;
+    harm.frequency.value = freq * 2;
+    const t0 = ctx.currentTime + i * 0.18;
+    const dur = i === 0 ? 0.32 : 0.55;
+    gain.gain.setValueAtTime(0.0001, t0);
+    gain.gain.linearRampToValueAtTime(baseVol, t0 + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    harmGain.gain.setValueAtTime(0.0001, t0);
+    harmGain.gain.linearRampToValueAtTime(baseVol * 0.28, t0 + 0.012);
+    harmGain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur * 0.7);
+    osc.connect(gain);
+    harm.connect(harmGain);
+    gain.connect(ctx.destination);
+    harmGain.connect(ctx.destination);
+    osc.start(t0);
+    harm.start(t0);
+    osc.stop(t0 + dur + 0.04);
+    harm.stop(t0 + dur + 0.04);
+  });
+}
+
+function scheduleAudioSessionRestore() {
+  clearTimeout(audioSessionResetTimer);
+  audioSessionResetTimer = setTimeout(() => {
+    setAudioSessionType('ambient');
+  }, 1150);
+}
+
+async function playTimerDoneFeedback({ forceChime = false, volume = 1.0, skipVibe = false } = {}) {
+  if (!skipVibe && isVibeEnabled()) {
+    try {
+      navigator.vibrate([160, 80, 160, 80, 240]);
+    } catch {
+      // Ignore
     }
-    const Ctx = window.AudioContext || window.webkitAudioContext;
-    if (!Ctx) return;
-    if (!sharedAudioCtx) sharedAudioCtx = new Ctx();
-    if (sharedAudioCtx.state === 'suspended') sharedAudioCtx.resume().catch(() => {});
-    const ctx = sharedAudioCtx;
-    [784, 1046.5].forEach((freq, i) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'triangle';
-      osc.frequency.value = freq;
-      const t0 = ctx.currentTime + i * 0.16;
-      gain.gain.setValueAtTime(0.001, t0);
-      gain.gain.exponentialRampToValueAtTime(0.14, t0 + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.24);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(t0);
-      osc.stop(t0 + 0.26);
-    });
+  }
+  if (!forceChime && !isChimeEnabled()) return;
+
+  // 'transient' briefly ducks background music (Spotify / Apple Music) while the chime plays
+  // instead of pausing it, then restores full music volume once reset to 'ambient'.
+  setAudioSessionType('transient');
+  scheduleAudioSessionRestore();
+
+  try {
+    if (!chimeAudioEl) {
+      chimeAudioEl = new Audio(getChimeWavUrl());
+      chimeAudioEl.playsInline = true;
+      chimeAudioEl.preload = 'auto';
+    } else if (chimeAudioEl.src !== getChimeWavUrl()) {
+      chimeAudioEl.src = getChimeWavUrl();
+    }
+    chimeAudioEl.muted = false;
+    chimeAudioEl.volume = Math.max(0.1, Math.min(1, volume));
+    chimeAudioEl.currentTime = 0;
+    chimeAudioEl.onended = () => {
+      clearTimeout(audioSessionResetTimer);
+      setAudioSessionType('ambient');
+    };
+    await chimeAudioEl.play();
+    chimeAudioUnlocked = true;
+    return;
   } catch {
-    // Ignore
+    // Fall back to Web Audio API synth
+  }
+
+  try {
+    await playWebAudioChime(volume);
+  } catch {
+    // Ignore autoplay errors when blocked
+  }
+}
+
+function persistRestTimer() {
+  state.activeRestTimer = { ...timer };
+  saveState();
+}
+
+function clearTimerInterval() {
+  if (timerIntervalId !== null) {
+    clearInterval(timerIntervalId);
+    timerIntervalId = null;
+  }
+}
+
+function ensureTimerInterval() {
+  if (timer.active && !timer.paused) {
+    if (timerIntervalId === null) {
+      timerIntervalId = setInterval(syncTimerTick, 500);
+    }
+  } else {
+    clearTimerInterval();
   }
 }
 
 function syncTimerTick() {
-  if (!timer.active || timer.paused) return;
-  const remaining = Math.max(0, Math.ceil((timer.endAtMs - Date.now()) / 1000));
-  timer.remainingSec = remaining;
-  if (remaining <= 0) {
-    timer.remainingSec = 0;
-    timer.paused = true;
+  if (!timer.active || timer.paused) {
+    clearTimerInterval();
+    return;
+  }
+  const { state: nextTimer, justCompleted, staleCompletion } = computeRestTimerTick(timer, Date.now());
+  const changed = nextTimer.remainingSec !== timer.remainingSec
+    || nextTimer.paused !== timer.paused
+    || nextTimer.completed !== timer.completed;
+  timer = nextTimer;
+  if (justCompleted) {
+    clearTimerInterval();
+    persistRestTimer();
+    syncWakeLock();
+    if (!staleCompletion) {
+      playTimerDoneFeedback();
+      showToast(`Rest complete: ${timer.label}`);
+    }
+  }
+  if (changed || justCompleted) {
+    renderRestDock();
+  }
+}
+
+function startRestTimer(seconds, label) {
+  unlockAudio();
+  const totalSec = Math.max(10, Math.round(Number(seconds) || 90));
+  timer = {
+    active: true,
+    paused: false,
+    completed: false,
+    remainingSec: totalSec,
+    totalSec,
+    endAtMs: Date.now() + totalSec * 1000,
+    label: String(label || 'Rest')
+  };
+  persistRestTimer();
+  ensureTimerInterval();
+  syncWakeLock();
+  renderRestDock();
+}
+
+function adjustRestTimer(delta) {
+  unlockAudio();
+  const { state: nextTimer, justCompleted } = adjustRestTimerState(timer, delta, Date.now());
+  timer = nextTimer;
+  persistRestTimer();
+  ensureTimerInterval();
+  syncWakeLock();
+  if (justCompleted) {
     playTimerDoneFeedback();
     showToast(`Rest complete: ${timer.label}`);
   }
   renderRestDock();
 }
 
-function startRestTimer(seconds, label) {
-  unlockAudio();
-  timer.active = true;
-  timer.paused = false;
-  timer.totalSec = Math.max(10, seconds);
-  timer.remainingSec = timer.totalSec;
-  timer.endAtMs = Date.now() + timer.totalSec * 1000;
-  timer.label = label;
-  clearInterval(timer.intervalId);
-  timer.intervalId = setInterval(syncTimerTick, 500);
-  renderRestDock();
-}
-
-function adjustRestTimer(delta) {
-  if (timer.paused) {
-    timer.remainingSec = Math.max(0, timer.remainingSec + delta);
-    if (timer.remainingSec > timer.totalSec) timer.totalSec = timer.remainingSec;
-    if (timer.remainingSec > 0) {
-      timer.endAtMs = Date.now() + timer.remainingSec * 1000;
-      timer.paused = false;
-    }
-  } else {
-    timer.endAtMs = Math.max(Date.now(), timer.endAtMs + delta * 1000);
-    timer.remainingSec = Math.max(0, Math.ceil((timer.endAtMs - Date.now()) / 1000));
-    if (timer.remainingSec > timer.totalSec) timer.totalSec = timer.remainingSec;
-  }
-  renderRestDock();
-}
-
 function toggleRestTimerPause() {
   if (!timer.active) return;
-  if (timer.paused) {
-    if (timer.remainingSec <= 0) timer.remainingSec = timer.totalSec;
-    timer.endAtMs = Date.now() + timer.remainingSec * 1000;
-    timer.paused = false;
-  } else {
-    timer.remainingSec = Math.max(0, Math.ceil((timer.endAtMs - Date.now()) / 1000));
-    timer.paused = true;
-  }
+  unlockAudio();
+  timer = toggleRestTimerPauseState(timer, Date.now());
+  persistRestTimer();
+  ensureTimerInterval();
+  syncWakeLock();
   renderRestDock();
 }
 
 function stopRestTimer() {
-  timer.active = false;
-  timer.paused = false;
-  clearInterval(timer.intervalId);
+  clearTimerInterval();
+  timer = createDefaultRestTimerState();
+  persistRestTimer();
+  syncWakeLock();
   renderRestDock();
 }
 
@@ -521,31 +740,65 @@ function formatMMSS(sec) {
   return `${m}:${rem}`;
 }
 
+function getRestAlertButtonDisplay() {
+  if (!supportsVibration()) {
+    const on = isChimeEnabled();
+    return {
+      on,
+      iconName: on ? 'volumeOn' : 'volumeOff',
+      label: on ? 'Chime On' : 'Muted'
+    };
+  }
+  const map = {
+    chime: { on: true, iconName: 'volumeOn', label: 'Chime+Vibe' },
+    chime_only: { on: true, iconName: 'volumeOn', label: 'Chime' },
+    vibe: { on: true, iconName: 'volumeOff', label: 'Vibe' },
+    mute: { on: false, iconName: 'volumeOff', label: 'Muted' }
+  };
+  return map[state.restAlertMode] || map.chime;
+}
+
 function renderRestDock() {
   const dock = document.getElementById('rest-dock');
   if (!dock) return;
   if (!timer.active) {
     dock.classList.add('hidden');
+    dock.classList.remove('is-done', 'is-paused');
     document.body.classList.remove('has-rest-dock');
     return;
   }
+  const isDone = timer.remainingSec <= 0;
   dock.classList.remove('hidden');
+  dock.classList.toggle('is-done', isDone);
+  dock.classList.toggle('is-paused', timer.paused && !isDone);
   document.body.classList.add('has-rest-dock');
-  document.getElementById('rest-ex-name').textContent = `Rest · ${timer.label}`;
-  document.getElementById('rest-countdown').textContent = timer.remainingSec === 0 ? 'GO!' : formatMMSS(timer.remainingSec);
-  document.getElementById('rest-toggle').textContent = timer.paused ? 'Resume' : 'Pause';
+
+  const prefix = isDone ? 'Rest Complete' : timer.paused ? 'Paused' : 'Rest';
+  document.getElementById('rest-ex-name').textContent = `${prefix} · ${timer.label}`;
+  document.getElementById('rest-countdown').textContent = isDone ? 'GO!' : formatMMSS(timer.remainingSec);
+
+  const toggleBtn = document.getElementById('rest-toggle');
+  if (toggleBtn) {
+    toggleBtn.textContent = isDone ? 'Restart' : timer.paused ? 'Resume' : 'Pause';
+    toggleBtn.className = `btn btn-sm ${isDone ? 'btn-primary' : 'btn-amber'}`;
+  }
+  const minusBtn = document.getElementById('rest-minus');
+  if (minusBtn) minusBtn.disabled = isDone;
+
   const alertBtn = document.getElementById('rest-alert-mode');
   if (alertBtn) {
-    const labels = {
-      chime: 'Chime+Vibe',
-      chime_only: 'Chime',
-      vibe: 'Vibe',
-      mute: 'Muted'
-    };
-    alertBtn.textContent = labels[state.restAlertMode] || 'Chime+Vibe';
+    const disp = getRestAlertButtonDisplay();
+    alertBtn.innerHTML = `${icon(disp.iconName)}<span>${disp.label}</span>`;
+    alertBtn.className = `btn btn-sm rest-chime-btn ${disp.on ? 'is-on' : 'is-off'}`;
+    alertBtn.setAttribute('aria-pressed', String(disp.on));
   }
-  const ratio = timer.totalSec > 0 ? Math.max(0, Math.min(1, timer.remainingSec / timer.totalSec)) : 0;
-  document.getElementById('rest-progress-bar').style.transform = `scaleX(${ratio.toFixed(4)})`;
+
+  const bar = document.getElementById('rest-progress-bar');
+  if (bar) {
+    const ratio = isDone ? 1 : (timer.totalSec > 0 ? Math.max(0, Math.min(1, timer.remainingSec / timer.totalSec)) : 0);
+    bar.style.transform = `scaleX(${ratio.toFixed(4)})`;
+    bar.style.background = isDone ? 'var(--primary)' : 'var(--amber)';
+  }
 }
 
 // ---------- Header & Navigation ----------
@@ -628,8 +881,6 @@ function renderHeader() {
   const headerMeta = document.getElementById('header-meta');
   headerMeta.innerHTML = `
     <span class="tabular">Day ${todayInfo.dayNum}/90 · Wk ${todayInfo.weekNum}</span>
-    <span>•</span>
-    <span>${escapeHtml(phaseInfo.label)}</span>
     ${state.phaseMode !== 'auto' ? '<span class="tag tag-warn">Manual</span>' : ''}
   `;
 
@@ -652,7 +903,10 @@ function renderHeader() {
 function openModal(title, html) {
   document.getElementById('modal-title').textContent = title;
   document.getElementById('modal-body').innerHTML = html;
-  document.getElementById('modal-backdrop').classList.remove('hidden');
+  const backdrop = document.getElementById('modal-backdrop');
+  backdrop.classList.remove('hidden');
+  const sheet = backdrop.querySelector('.modal-sheet');
+  if (sheet) sheet.scrollTop = 0;
 }
 
 function closeModal() {
@@ -815,18 +1069,25 @@ function openPlanEditorModal(workoutId) {
 }
 
 function openWorkoutSettingsModal() {
-  const alertOptions = [
-    { id: 'chime', label: 'Chime + Vibration' },
-    { id: 'chime_only', label: 'Chime Only' },
-    { id: 'vibe', label: 'Vibration Only (iOS music safe)' },
-    { id: 'mute', label: 'Silent (visual only)' }
-  ];
+  const hasVibe = supportsVibration();
+  const chimeOn = isChimeEnabled();
+  const alertOptions = hasVibe
+    ? [
+        { id: 'chime', label: 'Chime + Vibration', sub: 'Plays chime over music + vibrates' },
+        { id: 'chime_only', label: 'Chime Only', sub: 'Ducks music briefly for chime without vibrating' },
+        { id: 'vibe', label: 'Vibration Only', sub: 'Silent audio — vibrates when rest ends' },
+        { id: 'mute', label: 'Muted (Visual Only)', sub: 'Shows GO! on screen without sound or vibration' }
+      ]
+    : [
+        { id: 'chime', label: 'Chime On (Music-Safe)', sub: 'Plays a crisp chime that ducks music briefly without pausing it', selected: chimeOn },
+        { id: 'mute', label: 'Muted (Visual Only)', sub: 'No sound — dock highlights GO! when rest ends', selected: !chimeOn }
+      ];
   openModal('Workout Preferences', `
     <div class="check-list">
       <button type="button" class="check-row ${state.autoStartRestTimer ? 'done' : ''}" data-action="toggle-auto-timer">
         <div>
           <div style="font-weight:700;font-size:0.875rem;">Auto-Start Rest Timer</div>
-          <div class="muted-sm">Automatically starts countdown after logging a set</div>
+          <div class="muted-sm">Automatically starts countdown after logging a new set</div>
         </div>
         <span class="check-box">${state.autoStartRestTimer ? icon('check') : ''}</span>
       </button>
@@ -834,7 +1095,7 @@ function openWorkoutSettingsModal() {
         <button type="button" class="check-row ${state.keepAwake ? 'done' : ''}" data-action="toggle-wake-lock">
           <div>
             <div style="font-weight:700;font-size:0.875rem;">Keep Screen Awake</div>
-            <div class="muted-sm">Prevents auto-lock while on the Train tab</div>
+            <div class="muted-sm">Prevents auto-lock on Train tab &amp; while rest timer is running</div>
           </div>
           <span class="check-box">${state.keepAwake ? icon('check') : ''}</span>
         </button>
@@ -843,17 +1104,24 @@ function openWorkoutSettingsModal() {
     <div class="divider"></div>
     <div class="control-group">
       <div class="control-label-row">
-        <span>Default Rest Alert</span>
-        <span>Also adjustable on Rest Dock</span>
+        <span>Rest Timer Chime</span>
+        <button type="button" class="btn btn-sm" style="min-height:30px;padding:4px 10px;" data-action="test-chime">${icon('volumeOn')} <span>Test Chime</span></button>
       </div>
       <div class="check-list">
-        ${alertOptions.map((o) => `
-          <button type="button" class="check-row ${state.restAlertMode === o.id ? 'done' : ''}" data-action="set-alert-mode-pref" data-mode="${o.id}">
-            <span style="font-weight:600;font-size:0.875rem;">${escapeHtml(o.label)}</span>
-            <span class="check-box">${state.restAlertMode === o.id ? icon('check') : ''}</span>
-          </button>
-        `).join('')}
+        ${alertOptions.map((o) => {
+          const isSelected = hasVibe ? state.restAlertMode === o.id : Boolean(o.selected);
+          return `
+            <button type="button" class="check-row ${isSelected ? 'done' : ''}" data-action="set-alert-mode-pref" data-mode="${o.id}">
+              <div>
+                <div style="font-weight:600;font-size:0.875rem;">${escapeHtml(o.label)}</div>
+                <div class="muted-sm">${escapeHtml(o.sub)}</div>
+              </div>
+              <span class="check-box">${isSelected ? icon('check') : ''}</span>
+            </button>
+          `;
+        }).join('')}
       </div>
+      ${!hasVibe ? `<p class="muted-sm" style="margin:4px 0 0;">iOS note: Keep Screen Awake keeps the chime firing between sets over Spotify/Apple Music. Because iOS pauses static web timers when locked or in another app, the countdown catches up automatically when you return.</p>` : ''}
     </div>
   `);
 }
@@ -897,9 +1165,10 @@ function isBiweeklyCheckDue(todayIso) {
 }
 
 function renderTodayView() {
-  const { todayInfo, phase } = getEffectivePhase();
+  const { phase } = getEffectivePhase();
   const today = localTodayIso();
   const dateStr = state.selectedDate;
+  const selectedDayInfo = computePlanDayInfo(dateStr, state.startDate);
   const isNotToday = dateStr !== today;
   const log = ensureDailyLog(dateStr);
   const macros = getMacroTargets(log.dayType, phase, state.hungerTightSwing, state.calorieAdjustments);
@@ -908,8 +1177,11 @@ function renderTodayView() {
   const workoutsMap = getWorkouts();
   const nextWorkoutId = getNextSuggestedWorkoutId();
   const nextWorkout = workoutsMap[nextWorkoutId];
-  const activeDraftEntry = Object.entries(state.draftWorkouts).find(([, d]) => d?.startedAt);
+  const activeDraftEntry = Object.entries(state.draftWorkouts).find(([wId, d]) => d?.startedAt && workoutsMap[wId]);
   const hasActiveDraft = Boolean(activeDraftEntry);
+  const activeDraftWorkout = activeDraftEntry ? workoutsMap[activeDraftEntry[0]] : null;
+  const displayWorkout = activeDraftWorkout || nextWorkout;
+  const displayWorkoutId = activeDraftEntry ? activeDraftEntry[0] : nextWorkoutId;
   const todaySessions = state.workoutHistory.filter((h) => h.date === dateStr);
   const todayWeightEntry = state.weightLogs.find((w) => w.date === dateStr);
   const lastSession = state.workoutHistory.length ? state.workoutHistory[state.workoutHistory.length - 1] : null;
@@ -922,22 +1194,22 @@ function renderTodayView() {
       : `<button type="button" class="btn btn-sm btn-primary" data-action="go-progress">Log Weight</button><button type="button" class="btn btn-sm" data-action="toggle-skip-weighin">Skip</button>`;
 
   const workoutStatusHtml = todaySessions.length > 0
-    ? `<span class="tag tag-accent">${icon('check')} ${escapeHtml(workoutsMap[todaySessions[todaySessions.length - 1].workoutId]?.shortName || 'Logged')}</span><button type="button" class="btn btn-sm" data-action="go-train" data-workout="${nextWorkoutId}">Open Train</button>`
-    : activeDraftEntry
-      ? `<button type="button" class="btn btn-sm btn-primary" data-action="go-train" data-workout="${activeDraftEntry[0]}">Resume ${escapeHtml(workoutsMap[activeDraftEntry[0]]?.shortName || 'Session')}</button>`
+    ? `<span class="tag tag-accent">${icon('check')} ${escapeHtml(workoutsMap[todaySessions[todaySessions.length - 1].workoutId]?.shortName || 'Logged')}</span><button type="button" class="btn btn-sm" data-action="go-train" data-workout="${displayWorkoutId}">Open Train</button>`
+    : activeDraftWorkout
+      ? `<button type="button" class="btn btn-sm btn-primary" data-action="go-train" data-workout="${activeDraftEntry[0]}">Resume ${escapeHtml(activeDraftWorkout.shortName)}</button>`
       : `<button type="button" class="btn btn-sm btn-primary" data-action="go-train" data-workout="${nextWorkoutId}">Start ${escapeHtml(nextWorkout.shortName)}</button>`;
 
   const workoutSummaryText = todaySessions.length > 0
     ? `Trained today: ${escapeHtml(todaySessions[todaySessions.length - 1].workoutName)} (${todaySessions[todaySessions.length - 1].totalSetsDone} sets)`
-    : activeDraftEntry
-      ? `In progress: ${escapeHtml(workoutsMap[activeDraftEntry[0]]?.dayLabel || 'Workout')}`
+    : activeDraftWorkout
+      ? `In progress: ${escapeHtml(activeDraftWorkout.dayLabel)}`
       : `Today's lift: ${escapeHtml(nextWorkout.dayLabel)} (${escapeHtml(nextWorkout.estMinutes)})`;
 
   return `
     <section class="card">
       <div class="card-header">
         <div>
-          <h2 class="card-title">Today at a Glance · Day ${todayInfo.dayNum}/90</h2>
+          <h2 class="card-title">${isNotToday ? 'Day Summary' : 'Today at a Glance'} · Day ${selectedDayInfo.dayNum}/90</h2>
           <p class="card-meta">${escapeHtml(PHASES[phase].label)} · ${dateStr}${isNotToday ? ' (Viewing another day)' : ''}</p>
         </div>
         <span class="tag ${mealsDone === 4 && (todayWeightEntry || log.weighInSkipped) ? 'tag-accent' : ''}">${mealsDone}/4 meals · ${habitsDone}/${NUTRITION.habits.length} habits</span>
@@ -958,7 +1230,7 @@ function renderTodayView() {
           <div class="row-between" style="flex-wrap:wrap;gap:8px;">
             <div>
               <div style="font-weight:700;font-size:0.875rem;">${workoutSummaryText}</div>
-              <div class="muted-sm">${escapeHtml(nextWorkout.focus)}${lastSession ? ` · Rolling after ${escapeHtml(workoutsMap[lastSession.workoutId]?.shortName || lastSession.workoutName)}` : ''}</div>
+              <div class="muted-sm">${escapeHtml(displayWorkout.focus)}${lastSession ? ` · Rolling after ${escapeHtml(workoutsMap[lastSession.workoutId]?.shortName || lastSession.workoutName)}` : ''}</div>
             </div>
             <div class="row-wrap">${workoutStatusHtml}</div>
           </div>
@@ -1024,7 +1296,7 @@ function renderTodayView() {
         <div class="kpi-cell">
           <div class="kpi-label">Holiday Bank</div>
           <div class="kpi-value tabular">+${state.bankedKcal}</div>
-          <div class="kpi-note"><button type="button" class="btn btn-sm btn-ghost" style="padding:0;min-height:auto;color:var(--sky);" data-action="open-holiday">3-Plate &amp; Bank</button></div>
+          <div class="kpi-note"><button type="button" class="btn btn-sm btn-ghost" style="padding:0;min-height:auto;color:var(--primary);" data-action="open-holiday">3-Plate &amp; Bank</button></div>
         </div>
       </div>
 
@@ -1047,13 +1319,13 @@ function renderTodayView() {
     <section class="card">
       <div class="row-between" style="flex-wrap:wrap;gap:12px;">
         <div>
-          <h2 class="card-title">${hasActiveDraft ? 'Workout In Progress' : `Next Up: ${escapeHtml(nextWorkout.dayLabel)}`}${state.theme === 'pastel' ? CHEER_BUNNY_SVG : ''}</h2>
-          <p class="card-meta">${escapeHtml(nextWorkout.focus)} · ${escapeHtml(nextWorkout.estMinutes)} (&lt;1h cap)${lastSession ? ` · Rolling after ${escapeHtml(workoutsMap[lastSession.workoutId]?.shortName || lastSession.workoutName)}` : ''}</p>
+          <h2 class="card-title">${hasActiveDraft ? `In Progress: ${escapeHtml(displayWorkout.dayLabel)}` : `Next Up: ${escapeHtml(nextWorkout.dayLabel)}`}${state.theme === 'pastel' ? CHEER_BUNNY_SVG : ''}</h2>
+          <p class="card-meta">${escapeHtml(displayWorkout.focus)} · ${escapeHtml(displayWorkout.estMinutes)} (&lt;1h cap)${lastSession ? ` · Rolling after ${escapeHtml(workoutsMap[lastSession.workoutId]?.shortName || lastSession.workoutName)}` : ''}</p>
         </div>
         <div class="row-wrap">
           ${biweeklyDue ? `<button type="button" class="btn btn-sm" data-action="go-progress">Biweekly Waist/Photo Due</button>` : ''}
-          <button type="button" class="btn btn-primary" data-action="go-train" data-workout="${nextWorkoutId}">
-            <span>${hasActiveDraft ? 'Resume Session' : 'Start Workout'}</span>
+          <button type="button" class="btn btn-primary" data-action="go-train" data-workout="${displayWorkoutId}">
+            <span>${hasActiveDraft ? `Resume ${escapeHtml(displayWorkout.shortName)}` : 'Start Workout'}</span>
             ${icon('arrowRight')}
           </button>
         </div>
@@ -1385,7 +1657,7 @@ function renderTrainView() {
               <button type="button" class="tap-chip" data-action="nudge-weight" data-ex="${ex.id}" data-idx="${selIdx}" data-delta="${smallStep}">+${smallStep}</button>
               <button type="button" class="tap-chip" data-action="nudge-weight" data-ex="${ex.id}" data-idx="${selIdx}" data-delta="${largeStep}">+${largeStep}</button>
             </div>
-            ${plateText ? `<div class="muted-sm tabular">${escapeHtml(plateText)}</div>` : ''}
+            ${showBarbellPlates ? `<div class="muted-sm tabular" data-plate-for="${ex.id}_${selIdx}">${plateText ? escapeHtml(plateText) : ''}</div>` : ''}
           </div>
 
           <div class="control-group">
@@ -1419,7 +1691,7 @@ function renderTrainView() {
             <button type="button" class="btn btn-primary btn-block" style="flex:1;"
               data-action="log-active-set" data-ex="${ex.id}" data-idx="${selIdx}" data-rest="${ex.restSec}" data-label="${escapeHtml(activeName)}">
               ${icon('check')}
-              <span>
+              <span data-log-label-for="${ex.id}_${selIdx}">
                 ${selSet.done
                   ? `Re-Log Set ${selIdx + 1} (${selSet.weight || 'BW'} × ${rNum})`
                   : `Log Set ${selIdx + 1}${ex.leftFirst ? ' (L→R)' : ''} · ${selSet.weight || 'BW'} × ${rNum}`}
@@ -1493,12 +1765,12 @@ function renderTrainView() {
         `).join('')}
       </div>
 
-      <div class="row-between" style="margin-top:12px;gap:8px;">
-        <div>
+      <div class="row-between" style="margin-top:12px;gap:8px;align-items:flex-start;">
+        <div style="min-width:0;">
           <h2 class="card-title">${escapeHtml(workout.dayLabel)}</h2>
           <p class="card-meta">${escapeHtml(workout.focus)} · ${escapeHtml(workout.estMinutes)}</p>
         </div>
-        <div class="row-wrap">
+        <div class="row-wrap" style="flex-wrap:nowrap;flex-shrink:0;">
           <button type="button" class="btn btn-sm" data-action="open-plan-editor" data-workout="${workoutId}">Edit Plan</button>
           <button type="button" class="btn btn-sm btn-icon" aria-label="Workout settings" title="Workout Settings" data-action="open-workout-settings">
             ${icon('sliders')}
@@ -1517,8 +1789,8 @@ function renderTrainView() {
       <div class="row-between" style="margin-top:12px;gap:12px;flex-wrap:wrap;">
         <div style="flex:1;min-width:160px;">
           <div class="row-between muted-sm" style="margin-bottom:4px;">
-            <span class="tabular">${doneSets} / ${totalSets} sets${totalSets > doneSets ? ` · ~${estRemainingMin}m left` : ''}</span>
-            <span class="tabular ${over50 ? 'tag-warn' : ''}" id="session-clock">
+            <span class="tabular" style="white-space:nowrap;">${doneSets}/${totalSets} sets${totalSets > doneSets ? ` · ~${estRemainingMin}m` : ''}</span>
+            <span class="tabular ${over50 ? 'tag tag-warn' : ''}" id="session-clock">
               ${draft.startedAt ? `${formatMMSS(elapsedSec)} / 60:00` : 'Ready'}
             </span>
           </div>
@@ -1537,12 +1809,12 @@ function renderTrainView() {
 
     ${workout.hasShoulderPrehab ? `
       <section class="card">
-        <div class="row-between" style="margin-bottom:${prehabCollapsed ? '0' : '8px'};">
-          <div>
+        <div class="row-between" style="margin-bottom:${prehabCollapsed ? '0' : '8px'};align-items:flex-start;">
+          <div style="min-width:0;">
             <h3 class="card-title">Step 1: 2-Min Shoulder Prehab</h3>
             <p class="card-meta">${prehabBothDone ? 'Rotator cuff warmed up and ready to press.' : prehabSkipped ? 'Skipped for this session.' : 'Complete before Upper pressing'}</p>
           </div>
-          <div class="row-wrap">
+          <div class="row-wrap" style="justify-content:flex-end;flex-shrink:0;">
             ${prehabBothDone
               ? `<span class="tag tag-accent">${icon('check')} Complete</span>`
               : prehabSkipped
@@ -1739,8 +2011,13 @@ function renderProgressView() {
   const deltaBaseline = Number((latest.rollingAvg - PLAN_CONFIG.profile.startWeight).toFixed(1));
   const sortedWaists = [...state.waistLogs].sort((a, b) => a.date.localeCompare(b.date));
   const latestWaist = sortedWaists.length ? sortedWaists[sortedWaists.length - 1] : null;
-  if (pendingWeightInput === null) pendingWeightInput = latest.weight;
-  if (pendingWaistInput === null) pendingWaistInput = latestWaist ? latestWaist.waist : 34.0;
+  if (pendingWeightInput === null || pendingWeightInput === '' || !Number.isFinite(Number(pendingWeightInput))) {
+    pendingWeightInput = latest.weight;
+  }
+  if (pendingWaistInput === null || pendingWaistInput === '' || !Number.isFinite(Number(pendingWaistInput))) {
+    pendingWaistInput = latestWaist ? latestWaist.waist : 34.0;
+  }
+  const formattedWaistVal = Number(pendingWaistInput).toFixed(2).replace(/0$/, '');
 
   const adjustment = evaluateBiweeklyAdjustment({
     weightLogs: state.weightLogs,
@@ -1810,7 +2087,7 @@ function renderProgressView() {
           <div class="stepper-row">
             <button type="button" class="tap-chip" data-action="nudge-quick-metric" data-metric="waist" data-delta="-0.5">-0.5</button>
             <button type="button" class="tap-chip" data-action="nudge-quick-metric" data-metric="waist" data-delta="-0.25">-0.25</button>
-            <input id="waist-val-input" type="number" step="0.1" inputmode="decimal" aria-label="Waist in inches" class="num-input" value="${Number(pendingWaistInput).toFixed(1)}" />
+            <input id="waist-val-input" type="number" step="0.05" inputmode="decimal" aria-label="Waist in inches" class="num-input" value="${formattedWaistVal}" />
             <button type="button" class="tap-chip" data-action="nudge-quick-metric" data-metric="waist" data-delta="0.25">+0.25</button>
             <button type="button" class="tap-chip" data-action="nudge-quick-metric" data-metric="waist" data-delta="0.5">+0.5</button>
           </div>
@@ -2407,24 +2684,17 @@ document.addEventListener('click', (e) => {
     state.trainFocusMode = !state.trainFocusMode;
     saveState();
     renderMain();
-  } else if (action === 'cycle-alert-mode') {
+  } else if (action === 'test-chime') {
     unlockAudio();
-    const modes = ['chime', 'chime_only', 'vibe', 'mute'];
-    const idx = modes.indexOf(state.restAlertMode);
-    state.restAlertMode = modes[(idx + 1) % modes.length];
-    saveState();
-    const msgMap = {
-      chime: 'Rest alert: Chime + Vibration',
-      chime_only: 'Rest alert: Chime Only',
-      vibe: 'Rest alert: Vibration Only',
-      mute: 'Rest alert: Silent (visual only)'
-    };
-    showToast(msgMap[state.restAlertMode] || 'Rest alert updated');
-    renderMain();
+    playTimerDoneFeedback({ forceChime: true, volume: 1.0 });
+    showToast('Playing test chime');
   } else if (action === 'set-alert-mode-pref') {
     unlockAudio();
     state.restAlertMode = target.dataset.mode;
     saveState();
+    if (isChimeEnabled()) {
+      playTimerDoneFeedback({ forceChime: true, volume: 0.75, skipVibe: true });
+    }
     openWorkoutSettingsModal();
     renderMain();
   } else if (action === 'toggle-wake-lock') {
@@ -2599,11 +2869,16 @@ document.addEventListener('click', (e) => {
       const restSec = Math.max(15, Number(ex.restSec) || 60);
       const restLabel = restSec >= 120 && restSec % 60 === 0 ? `${restSec / 60} min` : `${restSec}s`;
       const cleanName = String(ex.name || '').trim() || 'Exercise';
+      const origEx = getWorkouts()[wId]?.exercises?.find((e) => e.id === ex.id);
+      const isBarbell = origEx && origEx.name === cleanName
+        ? Boolean(ex.isBarbell)
+        : /barbell/i.test(cleanName);
       const swaps = Array.isArray(ex.swaps) ? [...ex.swaps] : [];
       if (!swaps.includes(cleanName)) swaps.unshift(cleanName);
       return {
         ...ex,
         name: cleanName,
+        isBarbell,
         sets: Math.max(1, Number(ex.sets) || 3),
         repMin: Math.max(1, Number(ex.repMin) || 8),
         repMax: Math.max(Math.max(1, Number(ex.repMin) || 8), Number(ex.repMax) || 12),
@@ -2774,7 +3049,7 @@ document.addEventListener('click', (e) => {
         : 'All working sets complete! Tap Finish & Save.');
     } else if (supersetMovedToPartner) {
       msgs.push(`Superset → Now: ${partnerDisplayName}`);
-    } else if (state.autoStartRestTimer) {
+    } else if (!wasDone && state.autoStartRestTimer) {
       startRestTimer(Number(target.dataset.rest), target.dataset.label);
     }
 
@@ -3069,6 +3344,7 @@ document.addEventListener('click', (e) => {
 
     const prevHistory = structuredClone(state.workoutHistory);
     const prevPerf = structuredClone(state.lastPerformance);
+    const prevSwaps = structuredClone(state.swapsBySlot);
     const prevDraft = state.draftWorkouts[sess.workoutId] ? structuredClone(state.draftWorkouts[sess.workoutId]) : null;
     const removedKeys = (sess.exercises || []).map((e) => e.perfKey).filter(Boolean);
 
@@ -3076,12 +3352,22 @@ document.addEventListener('click', (e) => {
     state.lastPerformance = rebuildLastPerformance(state.workoutHistory, state.lastPerformance, removedKeys);
     expandedHistoryId = null;
 
+    for (const exEntry of sess.exercises || []) {
+      const defEx = workout.exercises.find((e) => e.id === exEntry.exId);
+      if (defEx && exEntry.name && exEntry.name !== defEx.name) {
+        state.swapsBySlot[exEntry.exId] = exEntry.name;
+      }
+    }
+
     delete state.draftWorkouts[sess.workoutId];
     const restoredDraft = ensureWorkoutDraft(sess.workoutId);
     restoredDraft.startedAt = sess.durationMin ? Date.now() - sess.durationMin * 60000 : Date.now();
     restoredDraft.conditioningDone = Boolean(sess.conditioningNote);
     for (const exEntry of sess.exercises || []) {
       const targetRows = restoredDraft.sets[exEntry.exId] || [];
+      if (exEntry.sets.length > targetRows.length) {
+        restoredDraft.extraSetsByEx[exEntry.exId] = (restoredDraft.extraSetsByEx[exEntry.exId] || 0) + (exEntry.sets.length - targetRows.length);
+      }
       exEntry.sets.forEach((s, idx) => {
         const rowObj = {
           weight: s.weight === 0 ? '' : String(s.weight),
@@ -3104,6 +3390,7 @@ document.addEventListener('click', (e) => {
     showToast(`Reopened ${workout.shortName} in Train`, () => {
       state.workoutHistory = prevHistory;
       state.lastPerformance = prevPerf;
+      state.swapsBySlot = prevSwaps;
       if (prevDraft) state.draftWorkouts[sess.workoutId] = prevDraft;
       else delete state.draftWorkouts[sess.workoutId];
       state.activeTab = 'progress';
@@ -3191,7 +3478,9 @@ document.addEventListener('click', (e) => {
   } else if (action === 'reset-data') {
     if (confirm('Reset all logged workouts, weights, and daily check-ins? Export a JSON backup first if you want to keep them.')) {
       const prevState = structuredClone(state);
+      stopRestTimer();
       state = createInitialState();
+      timer = createDefaultRestTimerState();
       pendingWeightInput = null;
       pendingWaistInput = null;
       expandedHistoryId = null;
@@ -3199,6 +3488,8 @@ document.addEventListener('click', (e) => {
       renderMain();
       showToast('Tracker reset to baseline', () => {
         state = prevState;
+        timer = normalizeRestTimerState(state.activeRestTimer);
+        ensureTimerInterval();
         saveState();
         renderMain();
       });
@@ -3221,9 +3512,28 @@ document.addEventListener('input', (e) => {
     const idx = Number(target.dataset.idx);
     const field = target.dataset.field;
     if (draft.sets[exId]?.[idx]) {
-      draft.sets[exId][idx][field] = target.value;
-      if (field === 'weight') draft.sets[exId][idx].weightEdited = true;
+      const row = draft.sets[exId][idx];
+      row[field] = target.value;
+      if (field === 'weight') row.weightEdited = true;
       saveState();
+      const workout = getWorkouts()[state.activeWorkoutId];
+      const ex = workout?.exercises?.find((e) => e.id === exId);
+      if (ex) {
+        const labelEl = document.querySelector(`[data-log-label-for="${exId}_${idx}"]`);
+        if (labelEl) {
+          const rNum = Number(row.reps) || ex.repMin;
+          labelEl.textContent = row.done
+            ? `Re-Log Set ${idx + 1} (${row.weight || 'BW'} × ${rNum})`
+            : `Log Set ${idx + 1}${ex.leftFirst ? ' (L→R)' : ''} · ${row.weight || 'BW'} × ${rNum}`;
+        }
+        const plateEl = document.querySelector(`[data-plate-for="${exId}_${idx}"]`);
+        if (plateEl) {
+          const plates = computeBarbellPlatesPerSide(Number(row.weight) || 0);
+          plateEl.textContent = plates
+            ? (plates.length ? `Per side (45 bar): ${plates.join(' + ')}` : 'Empty 45 lb barbell')
+            : '';
+        }
+      }
     }
   } else if (action === 'update-daily-num') {
     const log = ensureDailyLog(state.selectedDate);
@@ -3258,6 +3568,8 @@ document.addEventListener('change', (e) => {
           return;
         }
         state = normalizeRestoredState(parsed, createInitialState());
+        timer = normalizeRestTimerState(state.activeRestTimer);
+        ensureTimerInterval();
         pendingWeightInput = null;
         pendingWaistInput = null;
         expandedHistoryId = null;
@@ -3319,7 +3631,10 @@ document.addEventListener('click', (e) => {
   if (!e.target.closest('#theme-dropdown')) setThemeMenuOpen(false);
 });
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') setThemeMenuOpen(false);
+  if (e.key === 'Escape') {
+    setThemeMenuOpen(false);
+    closeModal();
+  }
 });
 document.getElementById('phase-pill-btn').addEventListener('click', openPhaseModal);
 document.getElementById('modal-close').addEventListener('click', closeModal);
@@ -3328,11 +3643,34 @@ document.getElementById('modal-backdrop').addEventListener('click', (e) => {
 });
 document.getElementById('rest-alert-mode').addEventListener('click', () => {
   unlockAudio();
+  if (!supportsVibration()) {
+    const nextOn = !isChimeEnabled();
+    state.restAlertMode = nextOn ? 'chime' : 'mute';
+    saveState();
+    renderRestDock();
+    if (nextOn) {
+      playTimerDoneFeedback({ forceChime: true, volume: 0.75, skipVibe: true });
+      showToast('Rest chime ON');
+    } else {
+      showToast('Rest chime muted');
+    }
+    return;
+  }
   const modes = ['chime', 'chime_only', 'vibe', 'mute'];
   const idx = modes.indexOf(state.restAlertMode);
   state.restAlertMode = modes[(idx + 1) % modes.length];
   saveState();
   renderRestDock();
+  const msgMap = {
+    chime: 'Rest alert: Chime + Vibration',
+    chime_only: 'Rest alert: Chime Only',
+    vibe: 'Rest alert: Vibration Only',
+    mute: 'Rest alert: Muted (visual only)'
+  };
+  if (isChimeEnabled()) {
+    playTimerDoneFeedback({ forceChime: true, volume: 0.75, skipVibe: true });
+  }
+  showToast(msgMap[state.restAlertMode] || 'Rest alert updated');
 });
 document.getElementById('rest-minus').addEventListener('click', () => adjustRestTimer(-15));
 document.getElementById('rest-plus').addEventListener('click', () => adjustRestTimer(15));
@@ -3357,6 +3695,8 @@ window.addEventListener('focus', syncTimerTick);
 window.addEventListener('storage', (e) => {
   if (e.key === STORAGE_KEY) {
     state = loadState();
+    timer = normalizeRestTimerState(state.activeRestTimer);
+    ensureTimerInterval();
     renderMain();
   }
 });
@@ -3400,6 +3740,11 @@ if (reqTab && ['today', 'train', 'progress', 'plan'].includes(reqTab)) {
 }
 
 renderMain();
+
+if (timer.active && !timer.paused) {
+  syncTimerTick();
+  ensureTimerInterval();
+}
 
 const reqModal = urlParams.get('modal');
 if (reqModal === 'phase') {

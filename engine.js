@@ -806,6 +806,187 @@ export function validateBackupState(raw) {
   return { valid: true };
 }
 
+export function createDefaultRestTimerState() {
+  return {
+    active: false,
+    paused: false,
+    completed: false,
+    remainingSec: 0,
+    totalSec: 90,
+    endAtMs: 0,
+    label: ''
+  };
+}
+
+export function normalizeRestTimerState(raw, nowMs = Date.now()) {
+  const fallback = createDefaultRestTimerState();
+  if (!raw || typeof raw !== 'object' || !raw.active) return fallback;
+  const totalSec = Math.max(10, Math.round(Number(raw.totalSec) || 90));
+  const label = String(raw.label || 'Rest');
+  const paused = Boolean(raw.paused);
+  const completed = Boolean(raw.completed);
+  const endAtMs = Number(raw.endAtMs) || 0;
+
+  if (paused) {
+    const remainingSec = Math.max(0, Math.round(Number(raw.remainingSec) || 0));
+    if (remainingSec === 0 && endAtMs > 0 && (nowMs - endAtMs) > 4 * 3600 * 1000) {
+      return fallback;
+    }
+    return {
+      active: true,
+      paused: true,
+      completed: completed || remainingSec === 0,
+      remainingSec,
+      totalSec: Math.max(totalSec, remainingSec || 10),
+      endAtMs: remainingSec === 0 ? endAtMs : 0,
+      label
+    };
+  }
+
+  if (endAtMs <= 0) return fallback;
+  if ((nowMs - endAtMs) > 4 * 3600 * 1000) return fallback;
+
+  const remainingSec = Math.max(0, Math.ceil((endAtMs - nowMs) / 1000));
+  return {
+    active: true,
+    paused: false,
+    completed: false,
+    remainingSec,
+    totalSec: Math.max(totalSec, remainingSec || 10),
+    endAtMs,
+    label
+  };
+}
+
+export function computeRestTimerTick(timerState, nowMs = Date.now()) {
+  if (!timerState?.active || timerState.paused) {
+    return { state: timerState || createDefaultRestTimerState(), justCompleted: false, staleCompletion: false };
+  }
+  const remainingSec = Math.max(0, Math.ceil((timerState.endAtMs - nowMs) / 1000));
+  if (remainingSec <= 0) {
+    const staleCompletion = (nowMs - timerState.endAtMs) > 120000;
+    return {
+      state: {
+        ...timerState,
+        remainingSec: 0,
+        paused: true,
+        completed: true
+      },
+      justCompleted: !timerState.completed,
+      staleCompletion
+    };
+  }
+  return {
+    state: {
+      ...timerState,
+      remainingSec,
+      completed: false
+    },
+    justCompleted: false,
+    staleCompletion: false
+  };
+}
+
+export function adjustRestTimerState(timerState, deltaSec, nowMs = Date.now()) {
+  if (!timerState?.active) {
+    return { state: timerState || createDefaultRestTimerState(), justCompleted: false };
+  }
+  const delta = Number(deltaSec) || 0;
+  if (timerState.paused) {
+    if (timerState.remainingSec <= 0 && delta <= 0) {
+      return { state: timerState, justCompleted: false };
+    }
+    const wasFinished = timerState.completed || timerState.remainingSec <= 0;
+    const nextRemaining = Math.max(0, timerState.remainingSec + delta);
+    const nextTotal = Math.max(timerState.totalSec, nextRemaining);
+    if (nextRemaining <= 0) {
+      return {
+        state: {
+          ...timerState,
+          remainingSec: 0,
+          totalSec: nextTotal,
+          paused: true,
+          completed: true,
+          endAtMs: nowMs
+        },
+        justCompleted: false
+      };
+    }
+    if (wasFinished) {
+      return {
+        state: {
+          ...timerState,
+          remainingSec: nextRemaining,
+          totalSec: nextTotal,
+          paused: false,
+          completed: false,
+          endAtMs: nowMs + nextRemaining * 1000
+        },
+        justCompleted: false
+      };
+    }
+    return {
+      state: {
+        ...timerState,
+        remainingSec: nextRemaining,
+        totalSec: nextTotal,
+        paused: true,
+        completed: false,
+        endAtMs: 0
+      },
+      justCompleted: false
+    };
+  }
+
+  const nextEndAtMs = timerState.endAtMs + delta * 1000;
+  const nextRemaining = Math.max(0, Math.ceil((nextEndAtMs - nowMs) / 1000));
+  if (nextRemaining <= 0) {
+    return {
+      state: {
+        ...timerState,
+        remainingSec: 0,
+        paused: true,
+        completed: true,
+        endAtMs: nowMs
+      },
+      justCompleted: !timerState.completed
+    };
+  }
+  return {
+    state: {
+      ...timerState,
+      remainingSec: nextRemaining,
+      totalSec: Math.max(timerState.totalSec, nextRemaining),
+      endAtMs: nextEndAtMs,
+      paused: false,
+      completed: false
+    },
+    justCompleted: false
+  };
+}
+
+export function toggleRestTimerPauseState(timerState, nowMs = Date.now()) {
+  if (!timerState?.active) return timerState || createDefaultRestTimerState();
+  if (timerState.paused) {
+    const nextRemaining = timerState.remainingSec <= 0 ? Math.max(10, timerState.totalSec) : timerState.remainingSec;
+    return {
+      ...timerState,
+      remainingSec: nextRemaining,
+      endAtMs: nowMs + nextRemaining * 1000,
+      paused: false,
+      completed: false
+    };
+  }
+  const remainingSec = Math.max(0, Math.ceil((timerState.endAtMs - nowMs) / 1000));
+  return {
+    ...timerState,
+    remainingSec,
+    endAtMs: remainingSec === 0 ? nowMs : 0,
+    paused: true,
+    completed: remainingSec === 0
+  };
+}
+
 export function normalizeRestoredState(parsed, base) {
   const safeObj = (v, fallback) => (v && typeof v === 'object' && !Array.isArray(v) ? v : fallback);
   return {
@@ -815,6 +996,7 @@ export function normalizeRestoredState(parsed, base) {
     swapsBySlot: safeObj(parsed.swapsBySlot, {}),
     lastPerformance: safeObj(parsed.lastPerformance, {}),
     draftWorkouts: safeObj(parsed.draftWorkouts, {}),
+    activeRestTimer: normalizeRestTimerState(parsed.activeRestTimer),
     calorieAdjustments: {
       ...base.calorieAdjustments,
       ...safeObj(parsed.calorieAdjustments, {})
