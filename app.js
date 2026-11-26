@@ -17,6 +17,7 @@ import {
   computeExerciseTargetHint,
   computeNextSessionDefaults,
   computeWorkoutContextBrief,
+  getExerciseHistoryTrail,
   getPriorSwapContext,
   getExercisePrescriptionRationale,
   evaluatePlanAdherence,
@@ -42,8 +43,12 @@ const ICONS = {
   swap: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 2 21 6 17 10"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 22 3 18 7 14"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>',
   flame: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>',
   bolt: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
+  chevronLeft: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>',
   chevronRight: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>',
   chevronDown: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>',
+  note: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
+  history: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>',
+  info: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>',
   close: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
   arrowRight: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>',
   sliders: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>',
@@ -108,6 +113,7 @@ function createInitialState() {
     activeWorkoutId: 'upperA',
     dailyLogs: {},
     swapsBySlot: {},
+    exerciseNotes: {},
     lastPerformance: {},
     draftWorkouts: {},
     activeRestTimer: createDefaultRestTimerState(),
@@ -155,6 +161,8 @@ let lastSavedBanner = null;
 let planEditorDraft = null;
 let showFullPlanDoc = false;
 let justCheckedTarget = null;
+let selectedChartIdx = null;
+let openWhyByEx = {};
 
 let sharedAudioCtx = null;
 let chimeAudioEl = null;
@@ -842,7 +850,7 @@ function renderRestDock() {
   if (bar) {
     const ratio = isDone ? 1 : (timer.totalSec > 0 ? Math.max(0, Math.min(1, timer.remainingSec / timer.totalSec)) : 0);
     bar.style.transform = `scaleX(${ratio.toFixed(4)})`;
-    bar.style.background = isDone ? 'var(--primary)' : 'var(--amber)';
+    bar.style.background = isDone ? 'var(--success)' : 'var(--amber)';
   }
 }
 
@@ -853,9 +861,9 @@ const THEMES = [
   { id: 'espresso', label: 'Brown · Gold', bg: '#181310', accent: '#fbbf24' },
   { id: 'light', label: 'White · Green', bg: '#f4f3ef', accent: '#15803d' },
   { id: 'ice', label: 'White · Blue', bg: '#f8fafc', accent: '#2563eb' },
-  { id: 'terracotta', label: 'White · Orange', bg: '#f9f8f6', accent: '#ea580c' },
+  { id: 'terracotta', label: 'White · Orange', bg: '#f9f8f6', accent: '#c2410c' },
   { id: 'blush', label: 'White · Pink', bg: '#fdf7f9', accent: '#c81e63' },
-  { id: 'pastel', label: 'Pastel · Sky · Berry · Mint · Gold', bg: '#f4f9ff', accent: '#e11d74', multi: ['#f4f9ff', '#e11d74', '#0d9488', '#fde047'] }
+  { id: 'pastel', label: 'Pastel · Sky · Berry · Mint · Gold', bg: '#f4f9ff', accent: '#e11d74', multi: ['#f4f9ff', '#e11d74', '#0f766e', '#fde047'] }
 ];
 
 function normalizeThemeId(id) {
@@ -932,7 +940,7 @@ function renderHeader() {
 
   const phaseBtn = document.getElementById('phase-pill-btn');
   phaseBtn.textContent = phaseInfo.label;
-  phaseBtn.className = `btn btn-sm ${phase === 'deload' ? 'tag-accent' : phase === 'phase2' ? 'tag-accent' : ''}`;
+  phaseBtn.className = `btn btn-sm ${phase === 'deload' ? 'tag-info' : phase === 'phase2' ? 'tag-accent' : ''}`;
 
   document.querySelectorAll('.nav-tab').forEach((btn) => {
     const active = btn.dataset.tab === state.activeTab;
@@ -1088,7 +1096,7 @@ function renderPlanEditorModalBody() {
           </div>
 
           <div class="row-between" style="gap:8px;flex-wrap:wrap;">
-            <button type="button" class="btn btn-sm ${ex.leftFirst ? 'tag-accent' : ''}" data-action="editor-toggle-left" data-idx="${idx}">
+            <button type="button" class="btn btn-sm ${ex.leftFirst ? 'tag-info' : ''}" data-action="editor-toggle-left" data-idx="${idx}">
               ${ex.leftFirst ? `${icon('check')} Left Arm First` : 'Left Arm First: Off'}
             </button>
             <input type="text" aria-label="Form cue or note" class="text-input" style="flex:1;min-width:160px;" placeholder="Form cue / swap note" value="${escapeHtml(ex.note || '')}" data-action="editor-field" data-idx="${idx}" data-field="note" />
@@ -1196,6 +1204,171 @@ function openHolidayModal() {
   `);
 }
 
+function formatHumanDate(iso) {
+  if (!iso) return '';
+  const d = new Date(`${iso}T12:00:00Z`);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
+}
+
+function renderBarbellPlateChips(plates) {
+  if (!plates) return '';
+  if (plates.length === 0) {
+    return '<div class="plate-chips-row"><span class="plate-label">Empty 45 lb barbell</span></div>';
+  }
+  return `
+    <div class="plate-chips-row">
+      <span class="plate-label">Per side:</span>
+      ${plates.map((p) => {
+        const cls = p === 45 ? 'plate-45' : p === 25 ? 'plate-25' : '';
+        return `<span class="plate-chip tabular ${cls}">${p}</span>`;
+      }).join('')}
+    </div>
+  `;
+}
+
+function openQuickWeighInModal(dateStr = state.selectedDate) {
+  const existing = state.weightLogs.find((w) => w.date === dateStr);
+  const series = computeRollingAverage(state.weightLogs, 7);
+  const latest = series[series.length - 1] || { weight: PLAN_CONFIG.profile.startWeight };
+  const initialVal = existing ? Number(existing.weight) : Number(latest.weight);
+  pendingWeightInput = Number.isFinite(initialVal) ? initialVal : 185;
+  openModal(`Morning Weigh-In · ${formatHumanDate(dateStr)}`, `
+    <div class="panel-inset">
+      <div class="control-label-row">
+        <span>Scale Weight (lbs)</span>
+        <input id="quick-weight-date" type="date" aria-label="Weight log date" class="text-input" style="width:auto;min-height:34px;padding:4px 8px;" value="${escapeHtml(dateStr)}" />
+      </div>
+      <div class="stepper-row">
+        <button type="button" class="tap-chip" data-action="nudge-quick-metric" data-metric="quick-weight" data-delta="-0.5">-0.5</button>
+        <button type="button" class="tap-chip" data-action="nudge-quick-metric" data-metric="quick-weight" data-delta="-0.2">-0.2</button>
+        <input id="quick-weight-val" type="number" step="0.1" inputmode="decimal" aria-label="Weight in pounds" class="num-input" value="${Number(pendingWeightInput).toFixed(1)}" />
+        <button type="button" class="tap-chip" data-action="nudge-quick-metric" data-metric="quick-weight" data-delta="0.2">+0.2</button>
+        <button type="button" class="tap-chip" data-action="nudge-quick-metric" data-metric="quick-weight" data-delta="0.5">+0.5</button>
+      </div>
+      <button type="button" class="btn btn-primary btn-block" data-action="save-quick-weight">Save Weigh-In</button>
+    </div>
+    <p class="muted-sm" style="margin:0;">Weigh before eating or drinking. Your 7-day rolling average updates automatically.</p>
+  `);
+}
+
+function openExerciseNoteModal(exId, activeName) {
+  const currentNote = state.exerciseNotes?.[exId] || '';
+  openModal(`Setup Note · ${activeName}`, `
+    <div class="control-group">
+      <label class="num-label" for="exercise-note-input">Pin / Seat / Grip / Joint Note (saved across sessions)</label>
+      <textarea id="exercise-note-input" rows="3" class="text-input" style="min-height:84px;resize:vertical;font-weight:500;" placeholder="e.g., Bench notch #3, cable pin #7, keep right shoulder packed">${escapeHtml(currentNote)}</textarea>
+    </div>
+    <div class="row-wrap">
+      <button type="button" class="btn btn-primary" style="flex:1;" data-action="save-exercise-note" data-ex="${escapeHtml(exId)}">Save Note</button>
+      ${currentNote ? `<button type="button" class="btn btn-danger" data-action="clear-exercise-note" data-ex="${escapeHtml(exId)}">Clear</button>` : ''}
+    </div>
+  `);
+}
+
+function openExerciseHistoryModal(exId, activeName, defaultName) {
+  const perfKey = getPerfKey(exId, activeName, defaultName);
+  const trail = getExerciseHistoryTrail(state.workoutHistory, perfKey, 8).reverse();
+  const bestW = trail.length ? Math.max(...trail.map((t) => t.maxW)) : 0;
+  const bestE1 = trail.length ? Math.max(...trail.map((t) => t.bestE1rm)) : 0;
+  const deltaE1 = trail.length >= 2 ? Number((trail[0].bestE1rm - trail[trail.length - 1].bestE1rm).toFixed(1)) : null;
+
+  openModal(`History · ${activeName}`, trail.length === 0
+    ? `<p class="muted-sm" style="margin:0;">No saved sessions logged for <strong>${escapeHtml(activeName)}</strong> yet. Finish &amp; Save a workout to build your lift history.</p>`
+    : `
+      <div class="kpi-strip kpi-strip-2">
+        <div class="kpi-cell">
+          <div class="kpi-label">Best Top Weight</div>
+          <div class="kpi-value tabular">${bestW > 0 ? `${bestW} lbs` : 'BW'}</div>
+          <div class="kpi-note">${trail.length} logged session${trail.length === 1 ? '' : 's'}</div>
+        </div>
+        <div class="kpi-cell">
+          <div class="kpi-label">Best Est. 1RM</div>
+          <div class="kpi-value tabular text-info">${bestE1 > 0 ? `${bestE1} lbs` : '—'}</div>
+          <div class="kpi-note">${deltaE1 !== null ? `${deltaE1 >= 0 ? '+' : ''}${deltaE1} lbs vs first` : 'Baseline logged'}</div>
+        </div>
+      </div>
+      <div class="list-divided">
+        ${trail.map((entry) => `
+          <div class="list-item">
+            <div class="row-between" style="flex-wrap:wrap;gap:6px;">
+              <strong style="font-size:0.875rem;">${escapeHtml(formatHumanDate(entry.date))}</strong>
+              <span class="tag tag-info tabular">${entry.bestE1rm > 0 ? `e1RM ~${entry.bestE1rm} lb` : `${entry.totalReps} reps`}</span>
+            </div>
+            <div class="muted-sm tabular" style="margin-top:4px;">
+              ${entry.sets.map((s, idx) => `S${idx + 1}: ${s.weight || 'BW'}×${s.reps}${s.rir !== undefined ? ` @${s.rir}` : ''}`).join(' · ')}
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    `);
+}
+
+function openRestPresetsModal(label = '') {
+  const activeLabel = label || timer.label || 'Manual Rest';
+  const presets = [
+    { sec: 45, label: '0:45' },
+    { sec: 60, label: '1:00' },
+    { sec: 90, label: '1:30' },
+    { sec: 120, label: '2:00' },
+    { sec: 150, label: '2:30' },
+    { sec: 180, label: '3:00' }
+  ];
+  openModal('Quick Rest Timer', `
+    <p class="muted-sm" style="margin:0;">Tap a preset to start or switch your rest countdown immediately.</p>
+    <div class="form-grid-3">
+      ${presets.map((p) => `
+        <button type="button" class="tap-chip tabular" data-action="pick-rest-preset" data-sec="${p.sec}" data-label="${escapeHtml(activeLabel)}">${p.label}</button>
+      `).join('')}
+    </div>
+  `);
+}
+
+function ensureTodayLiftingDay() {
+  const today = localTodayIso();
+  const daily = ensureDailyLog(today);
+  if (daily.dayType !== 'lifting') {
+    daily.dayType = 'lifting';
+    return true;
+  }
+  return false;
+}
+
+function renderConsistencyStrip(selectedDate) {
+  const today = localTodayIso();
+  const days = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(`${today}T12:00:00Z`);
+    d.setUTCDate(d.getUTCDate() - i);
+    const iso = d.toISOString().slice(0, 10);
+    const letter = d.toLocaleDateString('en-US', { weekday: 'narrow', timeZone: 'UTC' });
+    const entry = state.dailyLogs[iso];
+    const hasWorkout = state.workoutHistory.some((h) => h.date === iso);
+    const hasProtein = Boolean(entry && NUTRITION.meals.every((m) => entry.meals?.[m.id]));
+    const hasWeight = state.weightLogs.some((w) => w.date === iso);
+    days.push({ iso, letter, dayNum: d.getUTCDate(), hasWorkout, hasProtein, hasWeight, isSelected: iso === selectedDate });
+  }
+  return `
+    <div class="week-strip" role="group" aria-label="Last 7 days consistency">
+      ${days.map((day) => `
+        <button type="button" class="week-day-pill ${day.isSelected ? 'is-selected' : ''}" data-action="select-strip-date" data-date="${day.iso}" aria-label="${formatHumanDate(day.iso)}">
+          <span class="week-day-label">${day.letter}</span>
+          <span class="week-day-dots" aria-hidden="true">
+            <span class="week-dot ${day.hasWorkout ? 'dot-workout' : ''}"></span>
+            <span class="week-dot ${day.hasProtein ? 'dot-protein' : ''}"></span>
+            <span class="week-dot ${day.hasWeight ? 'dot-weight' : ''}"></span>
+          </span>
+        </button>
+      `).join('')}
+    </div>
+    <div class="week-legend">
+      <span class="week-legend-item"><span class="week-dot dot-workout"></span>Lift</span>
+      <span class="week-legend-item"><span class="week-dot dot-protein"></span>4/4 Protein</span>
+      <span class="week-legend-item"><span class="week-dot dot-weight"></span>Weigh-In</span>
+    </div>
+  `;
+}
+
 // ---------- Views ----------
 function isBiweeklyCheckDue(todayIso) {
   const { todayInfo } = getEffectivePhase();
@@ -1234,13 +1407,13 @@ function renderTodayView() {
   const biweeklyDue = isBiweeklyCheckDue(today);
 
   const weighInStatusHtml = todayWeightEntry
-    ? `<span class="tag tag-accent">${icon('check')} ${todayWeightEntry.weight} lbs</span><button type="button" class="btn btn-sm" data-action="go-progress">Edit</button>`
+    ? `<span class="tag tag-success">${icon('check')} ${todayWeightEntry.weight} lbs</span><button type="button" class="btn btn-sm" data-action="open-quick-weighin">Edit</button>`
     : log.weighInSkipped
       ? `<span class="tag">Skipped</span><button type="button" class="btn btn-sm" data-action="toggle-skip-weighin">Undo</button>`
-      : `<button type="button" class="btn btn-sm btn-primary" data-action="go-progress">Log Weight</button><button type="button" class="btn btn-sm" data-action="toggle-skip-weighin">Skip</button>`;
+      : `<button type="button" class="btn btn-sm btn-primary" data-action="open-quick-weighin">Log Weight</button><button type="button" class="btn btn-sm" data-action="toggle-skip-weighin">Skip</button>`;
 
   const workoutStatusHtml = todaySessions.length > 0
-    ? `<span class="tag tag-accent">${icon('check')} ${escapeHtml(workoutsMap[todaySessions[todaySessions.length - 1].workoutId]?.shortName || 'Logged')}</span><button type="button" class="btn btn-sm" data-action="go-train" data-workout="${displayWorkoutId}">Open Train</button>`
+    ? `<span class="tag tag-success">${icon('check')} ${escapeHtml(workoutsMap[todaySessions[todaySessions.length - 1].workoutId]?.shortName || 'Logged')}</span><button type="button" class="btn btn-sm" data-action="go-train" data-workout="${displayWorkoutId}">Open Train</button>`
     : activeDraftWorkout
       ? `<button type="button" class="btn btn-sm btn-primary" data-action="go-train" data-workout="${activeDraftEntry[0]}">Resume ${escapeHtml(activeDraftWorkout.shortName)}</button>`
       : `<button type="button" class="btn btn-sm btn-primary" data-action="go-train" data-workout="${nextWorkoutId}">Start ${escapeHtml(nextWorkout.shortName)}</button>`;
@@ -1253,20 +1426,20 @@ function renderTodayView() {
 
   return `
     <section class="card">
-      <div class="card-header">
-        <div>
-          <h2 class="card-title">${isNotToday ? 'Day Summary' : 'Today at a Glance'} · Day ${selectedDayInfo.dayNum}/90</h2>
-          <p class="card-meta">${escapeHtml(PHASES[phase].label)} · ${dateStr}${isNotToday ? ' (Viewing another day)' : ''}</p>
+      <div class="card-header card-header-inline">
+        <div style="min-width:0;">
+          <h2 class="card-title">${isNotToday ? 'Day Summary' : 'Today at a Glance'} · Day ${selectedDayInfo.dayNum}/90${state.theme === 'pastel' ? CHEER_BUNNY_SVG : ''}</h2>
+          <p class="card-meta">${escapeHtml(PHASES[phase].label)} · ${escapeHtml(formatHumanDate(dateStr))}${isNotToday ? ' (Viewing another day)' : ''}</p>
         </div>
-        <span class="tag ${mealsDone === 4 && (todayWeightEntry || log.weighInSkipped) ? 'tag-accent' : ''}">${mealsDone}/4 meals · ${habitsDone}/${NUTRITION.habits.length} habits</span>
+        <span class="tag ${mealsDone === 4 && (todayWeightEntry || log.weighInSkipped) ? 'tag-success' : ''}">${mealsDone}/4 · ${habitsDone}/${NUTRITION.habits.length}</span>
       </div>
 
       <div class="list-divided">
         <div class="list-item">
           <div class="row-between" style="flex-wrap:wrap;gap:8px;">
             <div>
-              <div style="font-weight:700;font-size:0.875rem;">Morning Weigh-In</div>
-              <div class="muted-sm">${todayWeightEntry ? `Logged ${todayWeightEntry.weight} lbs for ${dateStr}` : log.weighInSkipped ? 'Skipped for today' : 'Weigh yourself before eating or drinking'}</div>
+              <div style="font-weight:700;font-size:0.9375rem;">Morning Weigh-In</div>
+              <div class="muted-sm">${todayWeightEntry ? `Logged ${todayWeightEntry.weight} lbs for ${formatHumanDate(dateStr)}` : log.weighInSkipped ? 'Skipped for today' : 'Weigh yourself before eating or drinking'}</div>
             </div>
             <div class="row-wrap">${weighInStatusHtml}</div>
           </div>
@@ -1275,7 +1448,7 @@ function renderTodayView() {
         <div class="list-item">
           <div class="row-between" style="flex-wrap:wrap;gap:8px;">
             <div>
-              <div style="font-weight:700;font-size:0.875rem;">${workoutSummaryText}</div>
+              <div style="font-weight:700;font-size:0.9375rem;">${workoutSummaryText}</div>
               <div class="muted-sm">${escapeHtml(displayWorkout.focus)}${lastSession ? ` · Rolling after ${escapeHtml(workoutsMap[lastSession.workoutId]?.shortName || lastSession.workoutName)}` : ''}</div>
             </div>
             <div class="row-wrap">${workoutStatusHtml}</div>
@@ -1285,41 +1458,47 @@ function renderTodayView() {
         <div class="list-item">
           <div class="row-between" style="flex-wrap:wrap;gap:8px;">
             <div>
-              <div style="font-weight:700;font-size:0.875rem;">Fuel &amp; Daily Non-Negotiables</div>
-              <div class="muted-sm">${macros.kcal} kcal (${macros.protein} P) · 8–10k steps · 7–8h sleep · 5g creatine${log.dayType === 'lifting' ? ' · No caffeine >2 PM' : ''}</div>
+              <div style="font-weight:700;font-size:0.9375rem;">Fuel &amp; Daily Non-Negotiables</div>
+              <div class="muted-sm">${macros.kcal} kcal (<span class="text-info" style="font-weight:600;">${macros.protein} P</span>) · 8–10k steps · 7–8h sleep · 5g creatine${log.dayType === 'lifting' ? ' · No caffeine >2 PM' : ''}</div>
             </div>
-            ${biweeklyDue ? `<button type="button" class="btn btn-sm" data-action="go-progress">Waist/Photo Due</button>` : ''}
+            ${biweeklyDue ? `<button type="button" class="btn btn-sm tag-warn" data-action="go-progress">Waist/Photo Due</button>` : ''}
           </div>
         </div>
       </div>
+
+      <div class="divider" style="margin:12px 0;"></div>
+      ${renderConsistencyStrip(dateStr)}
     </section>
 
     ${lastSavedBanner ? `
-      <section class="card" style="border-color: var(--primary);">
+      <section class="card" style="border-color: var(--success);">
         <div class="row-between">
           <div>
-            <h2 class="card-title" style="color:var(--primary);">Session Saved: ${escapeHtml(lastSavedBanner.workoutName)}</h2>
+            <h2 class="card-title text-success">Session Saved: ${escapeHtml(lastSavedBanner.workoutName)}</h2>
             <p class="card-meta">${lastSavedBanner.totalSetsDone} sets${lastSavedBanner.durationMin ? ` · ${lastSavedBanner.durationMin} min` : ''}${lastSavedBanner.conditioningNote ? ` · ${escapeHtml(lastSavedBanner.conditioningNote)}` : ''}</p>
           </div>
           <button type="button" class="btn btn-sm btn-icon btn-ghost" aria-label="Dismiss session summary" data-action="dismiss-saved-banner">${icon('close')}</button>
         </div>
         ${lastSavedBanner.progressions?.length
-          ? `<div class="tag tag-accent" style="margin-top:8px;white-space:normal;">${icon('flame')} <span>Unlocked next session: ${lastSavedBanner.progressions.map(escapeHtml).join(' · ')}</span></div>`
+          ? `<div class="tag tag-info" style="margin-top:8px;white-space:normal;">${icon('flame')} <span>Unlocked next session: ${lastSavedBanner.progressions.map(escapeHtml).join(' · ')}</span></div>`
           : ''}
       </section>
     ` : ''}
 
     <section class="card">
-      <div class="row-between" style="flex-wrap:wrap;gap:12px;">
-        <div class="row-wrap">
-          <button type="button" class="btn btn-sm" data-action="shift-date" data-days="-1">Prev</button>
-          <input type="date" aria-label="Selected date" class="text-input" style="width:auto;min-height:36px;padding:4px 12px;" value="${dateStr}" data-action="pick-date" />
-          <button type="button" class="btn btn-sm" data-action="shift-date" data-days="1">Next</button>
-          ${isNotToday ? `<button type="button" class="btn btn-sm btn-amber" data-action="jump-today">Back to Today</button>` : ''}
+      <div class="date-nav-bar">
+        <div class="date-pill-group">
+          <button type="button" class="btn btn-sm btn-icon" style="width:36px;height:36px;" aria-label="Previous day" data-action="shift-date" data-days="-1">${icon('chevronLeft')}</button>
+          <div class="date-display-wrap">
+            <span>${escapeHtml(formatHumanDate(dateStr))}</span>
+            <input type="date" aria-label="Selected date" class="date-native-overlay" value="${dateStr}" data-action="pick-date" />
+          </div>
+          <button type="button" class="btn btn-sm btn-icon" style="width:36px;height:36px;" aria-label="Next day" data-action="shift-date" data-days="1">${icon('chevronRight')}</button>
+          ${isNotToday ? `<button type="button" class="btn btn-sm btn-amber" data-action="jump-today">Today</button>` : ''}
         </div>
         <div class="segmented" role="tablist" aria-label="Day nutrition mode">
-          <button type="button" class="seg-btn seg-btn-primary" aria-selected="${log.dayType === 'lifting'}" data-action="set-day-type" data-type="lifting">Lifting Day</button>
-          <button type="button" class="seg-btn seg-btn-primary" aria-selected="${log.dayType === 'rest'}" data-action="set-day-type" data-type="rest">Rest Day</button>
+          <button type="button" class="seg-btn seg-btn-primary" aria-selected="${log.dayType === 'lifting'}" data-action="set-day-type" data-type="lifting">Lifting</button>
+          <button type="button" class="seg-btn seg-btn-primary" aria-selected="${log.dayType === 'rest'}" data-action="set-day-type" data-type="rest">Rest</button>
         </div>
       </div>
 
@@ -1331,18 +1510,18 @@ function renderTodayView() {
         </div>
         <div class="kpi-cell">
           <div class="kpi-label">Protein Floor</div>
-          <div class="kpi-value tabular" style="color:var(--primary);">${macros.protein}</div>
+          <div class="kpi-value tabular text-info">${macros.protein}</div>
           <div class="kpi-note">${mealsDone}/4 boluses checked</div>
         </div>
         <div class="kpi-cell">
           <div class="kpi-label">Carbs / Fats</div>
-          <div class="kpi-value tabular" style="font-size:1.05rem;">${macros.carbs} C</div>
+          <div class="kpi-value tabular">${macros.carbs} C</div>
           <div class="kpi-note">${macros.fats} Fats</div>
         </div>
         <div class="kpi-cell">
           <div class="kpi-label">Holiday Bank</div>
           <div class="kpi-value tabular">+${state.bankedKcal}</div>
-          <div class="kpi-note"><button type="button" class="btn btn-sm btn-ghost" style="padding:0;min-height:auto;color:var(--primary);" data-action="open-holiday">3-Plate &amp; Bank</button></div>
+          <div class="kpi-note"><button type="button" class="btn btn-sm btn-ghost" style="padding:0;min-height:auto;color:var(--info);" data-action="open-holiday">3-Plate &amp; Bank</button></div>
         </div>
       </div>
 
@@ -1358,34 +1537,18 @@ function renderTodayView() {
           </button>
         </div>
       ` : `
-        <div class="tag tag-accent" style="margin-top:12px;">Week 7 Deload: Eat at maintenance (~2,650–2,750 kcal) via extra carbs.</div>
+        <div class="tag tag-info" style="margin-top:12px;white-space:normal;">Week 7 Deload: Eat at maintenance (~2,650–2,750 kcal) via extra carbs.</div>
       `}
-    </section>
-
-    <section class="card">
-      <div class="row-between" style="flex-wrap:wrap;gap:12px;">
-        <div>
-          <h2 class="card-title">${hasActiveDraft ? `In Progress: ${escapeHtml(displayWorkout.dayLabel)}` : `Next Up: ${escapeHtml(nextWorkout.dayLabel)}`}${state.theme === 'pastel' ? CHEER_BUNNY_SVG : ''}</h2>
-          <p class="card-meta">${escapeHtml(displayWorkout.focus)} · ${escapeHtml(displayWorkout.estMinutes)} (&lt;1h cap)${lastSession ? ` · Rolling after ${escapeHtml(workoutsMap[lastSession.workoutId]?.shortName || lastSession.workoutName)}` : ''}</p>
-        </div>
-        <div class="row-wrap">
-          ${biweeklyDue ? `<button type="button" class="btn btn-sm" data-action="go-progress">Biweekly Waist/Photo Due</button>` : ''}
-          <button type="button" class="btn btn-primary" data-action="go-train" data-workout="${displayWorkoutId}">
-            <span>${hasActiveDraft ? `Resume ${escapeHtml(displayWorkout.shortName)}` : 'Start Workout'}</span>
-            ${icon('arrowRight')}
-          </button>
-        </div>
-      </div>
     </section>
 
     <div class="grid-2">
       <section class="card">
-        <div class="card-header">
-          <div>
+        <div class="card-header card-header-inline">
+          <div style="min-width:0;">
             <h2 class="card-title">4-Meal Protein Bolus (${mealsDone}/4)</h2>
             <p class="card-meta">Spaced 3–4h apart · Meal 4 is Pre-Sleep Anchor</p>
           </div>
-          <span class="tag ${mealsDone === 4 ? 'tag-accent' : ''}">${mealsDone === 4 ? '180–185g Hit' : `${mealsDone}/4`}</span>
+          <span class="tag ${mealsDone === 4 ? 'tag-success' : ''}">${mealsDone === 4 ? '180–185g Hit' : `${mealsDone}/4`}</span>
         </div>
         <div class="check-list">
           ${NUTRITION.meals.map((m) => {
@@ -1394,7 +1557,7 @@ function renderTodayView() {
             return `
               <button type="button" class="check-row ${done ? 'done' : ''} ${justChecked ? 'just-checked' : ''}" data-action="toggle-meal" data-id="${m.id}">
                 <div>
-                  <div style="font-weight:700;font-size:0.875rem;">${escapeHtml(m.title)} · <span style="color:var(--primary);">${escapeHtml(m.target)}</span></div>
+                  <div style="font-weight:700;font-size:0.9375rem;">${escapeHtml(m.title)} · <span class="text-info">${escapeHtml(m.target)}</span></div>
                   <div class="muted-sm">${escapeHtml(m.timing)} · ${escapeHtml(m.detail)}</div>
                 </div>
                 <span class="check-box">${done ? icon('check') : ''}</span>
@@ -1418,7 +1581,7 @@ function renderTodayView() {
             return `
               <button type="button" class="check-row ${done ? 'done' : ''} ${justChecked ? 'just-checked' : ''}" data-action="toggle-habit" data-id="${h.id}">
                 <div>
-                  <div style="font-weight:600;font-size:0.875rem;">${escapeHtml(h.label)}</div>
+                  <div style="font-weight:600;font-size:0.9375rem;">${escapeHtml(h.label)}</div>
                   <div class="muted-sm">${escapeHtml(h.meta)}</div>
                 </div>
                 <span class="check-box">${done ? icon('check') : ''}</span>
@@ -1554,9 +1717,12 @@ function renderTrainView({ overrideExpandedIds = null } = {}) {
 
     const showBarbellPlates = effectiveBarbell;
     const platesPerSide = showBarbellPlates ? computeBarbellPlatesPerSide(wNum) : null;
-    const plateText = platesPerSide
-      ? (platesPerSide.length ? `Per side (45 bar): ${platesPerSide.join(' + ')}` : 'Empty 45 lb barbell')
-      : null;
+    const savedSetupNote = String(state.exerciseNotes?.[ex.id] || '').trim();
+    const perfKey = getPerfKey(ex.id, activeName, ex.name);
+    const historyCount = getExerciseHistoryTrail(state.workoutHistory, perfKey, 20).length;
+    const whyOpen = Boolean(openWhyByEx[ex.id]);
+    const hasDifferentUpcomingWeight = selIdx < setRows.length - 1 &&
+      setRows.slice(selIdx + 1).some((s) => !s.done && String(s.weight ?? '') !== String(selSet.weight ?? ''));
 
     const rampOpen = Boolean(draft.rampOpen[ex.id]);
     const rampSets = ex.rampUp ? computeRampUpSets(wNum || ex.defaultWeight || 135, effectiveBarbell) : [];
@@ -1569,6 +1735,7 @@ function renderTrainView({ overrideExpandedIds = null } = {}) {
       ? (prev.sets.reduce((sum, s) => sum + (Number(s.rir) || 0), 0) / prev.sets.length).toFixed(1).replace(/\.0$/, '')
       : null;
     const priorSwap = !isSwapped ? getPriorSwapContext(state.workoutHistory, workoutId, ex.id, ex.name) : null;
+    const repTotalChips = repOptions.length + 2;
 
     return `
       <article class="exercise-card ${expanded ? 'is-expanded' : 'is-collapsed'} ${isActiveFocus ? 'is-active' : ''} ${allExDone ? 'is-done' : ''}" data-ex-card="${ex.id}">
@@ -1582,7 +1749,7 @@ function renderTrainView({ overrideExpandedIds = null } = {}) {
           </div>
           <div class="exercise-head-status">
             ${allExDone
-              ? `<span class="tag tag-accent">${icon('check')} Done</span>`
+              ? `<span class="tag tag-success">${icon('check')} Done</span>`
               : `<span class="tag tabular">${exDoneCount}/${setRows.length}</span>`}
             <span class="exercise-chevron" aria-hidden="true">${icon('chevronDown')}</span>
           </div>
@@ -1591,17 +1758,26 @@ function renderTrainView({ overrideExpandedIds = null } = {}) {
         <div class="exercise-collapse" id="ex-body-${ex.id}" ${expanded ? '' : 'inert'}>
           <div class="exercise-collapse-inner">
             <div class="exercise-actions-row">
-              <div class="row-wrap">
-                ${ex.leftFirst ? '<span class="tag tag-accent">Left Arm First → Match R</span>' : ''}
+              <div class="row-wrap" style="gap:6px;">
+                ${ex.leftFirst ? '<span class="tag tag-info">Left Arm First</span>' : ''}
                 <span class="tag">${effectiveBarbell ? `Barbell (+${weightStep} lb)` : ex.isCompound ? `Compound (+${weightStep} lb)` : `Isolation (+${weightStep} lb)`}</span>
-                ${spec.phaseNote ? `<span class="tag tag-accent">${escapeHtml(spec.phaseNote)}</span>` : ''}
+                ${spec.phaseNote ? `<span class="tag tag-info">${escapeHtml(spec.phaseNote)}</span>` : ''}
                 ${spec.activeIntensifier ? `<span class="tag tag-warn">${icon('bolt')} ${escapeHtml(spec.activeIntensifier)}</span>` : ''}
               </div>
-              <div class="row-wrap" style="justify-content:flex-end;">
-                ${ex.rampUp ? `<button type="button" class="btn btn-sm" data-action="toggle-ramp-inline" data-ex="${ex.id}">${rampOpen ? 'Hide Ramp' : 'Ramp-Up'}</button>` : ''}
+              <div class="row-wrap" style="justify-content:flex-end;gap:6px;">
+                ${ex.rampUp ? `<button type="button" class="btn btn-sm" data-action="toggle-ramp-inline" data-ex="${ex.id}">${rampOpen ? 'Hide Ramp' : 'Ramp'}</button>` : ''}
+                <button type="button" class="btn btn-sm ${savedSetupNote ? 'btn-info-active' : ''}" data-action="open-exercise-note" data-ex="${ex.id}" data-name="${escapeHtml(activeName)}" title="Pin, seat &amp; setup note">${icon('note')} <span>Note</span></button>
+                <button type="button" class="btn btn-sm" data-action="open-exercise-history" data-ex="${ex.id}" data-name="${escapeHtml(activeName)}" data-default="${escapeHtml(ex.name)}" title="Past sessions for this lift">${icon('history')}${historyCount > 0 ? `<span class="tabular">${historyCount}</span>` : ''}</button>
                 <button type="button" class="btn btn-sm" data-action="open-swap" data-ex="${ex.id}">${icon('swap')} <span>${isSwapped ? 'Swapped' : 'Swap'}</span></button>
               </div>
             </div>
+
+        ${savedSetupNote ? `
+          <div class="setup-note-strip">
+            <div><strong>Setup:</strong> ${escapeHtml(savedSetupNote)}</div>
+            <button type="button" class="btn btn-sm btn-ghost" style="min-height:28px;padding:2px 8px;" data-action="open-exercise-note" data-ex="${ex.id}" data-name="${escapeHtml(activeName)}">Edit</button>
+          </div>
+        ` : ''}
 
         <!-- Live Mid-Set Target HUD -->
         <div class="kpi-strip kpi-strip-2">
@@ -1612,7 +1788,7 @@ function renderTrainView({ overrideExpandedIds = null } = {}) {
           </div>
           <div class="kpi-cell">
             <div class="kpi-label">Today's Goal</div>
-            <div class="kpi-value tabular" style="font-size:0.95rem;color:${targetHint.mode === 'progress' ? 'var(--primary)' : 'var(--text)'};">${escapeHtml(targetHint.headline)}</div>
+            <div class="kpi-value tabular" style="font-size:0.95rem;color:${targetHint.mode === 'progress' ? 'var(--primary)' : 'var(--info)'};">${escapeHtml(targetHint.headline)}</div>
             <div class="kpi-note">${escapeHtml(targetHint.detail)}</div>
           </div>
         </div>
@@ -1629,17 +1805,20 @@ function renderTrainView({ overrideExpandedIds = null } = {}) {
             expectedSets: spec.sets,
             prevEntry: prev
           });
-          const hasBadges = Boolean(priorSwap) || adherence.reasons.length > 0 || exDoneCount > 0;
+          const hasWarningBadges = Boolean(priorSwap) || adherence.reasons.length > 0;
           return `
             <div class="exercise-notes">
-              ${ex.note ? `<div class="muted-sm"><strong>Cue:</strong> ${escapeHtml(ex.note)}</div>` : ''}
-              <div class="muted-sm"><strong>Why:</strong> ${escapeHtml(whyText)}</div>
-              ${hasBadges ? `
-                <div class="row" style="gap:8px;flex-wrap:wrap;">
+              <div class="cue-row">
+                <div class="cue-text">${ex.note ? `<strong>Cue:</strong> ${escapeHtml(ex.note)}` : `<strong>Focus:</strong> ${escapeHtml(whyText)}`}</div>
+                ${ex.note ? `<button type="button" class="btn btn-ghost why-toggle-btn" data-action="toggle-why-inline" data-ex="${ex.id}" aria-expanded="${whyOpen}">${icon('info')} <span>${whyOpen ? 'Hide' : 'Why'}</span></button>` : ''}
+              </div>
+              ${ex.note && whyOpen ? `<div class="muted-sm"><strong>Why:</strong> ${escapeHtml(whyText)}</div>` : ''}
+              ${hasWarningBadges || (whyOpen && exDoneCount > 0) ? `
+                <div class="row-wrap" style="gap:6px;">
                   ${priorSwap ? `<span class="tag tag-warn">Prior Swap: ${escapeHtml(priorSwap.swappedName)} (${escapeHtml(priorSwap.date.slice(5))}${priorSwap.setsText ? ` · ${escapeHtml(priorSwap.setsText)}` : ''})</span>` : ''}
                   ${adherence.reasons.length > 0
                     ? `<span class="tag tag-warn">Plan Deviation: ${escapeHtml(adherence.reasons.join(' · '))}</span>`
-                    : (exDoneCount > 0 ? `<span class="tag tag-accent">On Plan</span>` : '')}
+                    : (exDoneCount > 0 ? `<span class="tag tag-success">On Plan</span>` : '')}
                 </div>
               ` : ''}
             </div>
@@ -1668,7 +1847,7 @@ function renderTrainView({ overrideExpandedIds = null } = {}) {
         ` : ''}
 
         ${progression ? `
-          <div class="tag tag-accent" style="white-space:normal;padding:8px 12px;">
+          <div class="tag tag-success" style="white-space:normal;padding:8px 12px;">
             ${icon('flame')} <span>${escapeHtml(progression.message)}</span>
           </div>
         ` : ''}
@@ -1703,7 +1882,7 @@ function renderTrainView({ overrideExpandedIds = null } = {}) {
           <div class="control-group">
             <div class="control-label-row">
               <span>Set ${selIdx + 1} Weight (lbs)</span>
-              ${selIdx < setRows.length - 1 ? `<button type="button" class="btn btn-sm btn-ghost" style="min-height:28px;padding:2px 8px;" data-action="copy-weight-rest" data-ex="${ex.id}" data-idx="${selIdx}">Copy to remaining</button>` : ''}
+              ${hasDifferentUpcomingWeight ? `<button type="button" class="btn btn-sm btn-ghost" style="min-height:28px;padding:2px 8px;color:var(--info);" data-action="copy-weight-rest" data-ex="${ex.id}" data-idx="${selIdx}">Copy to remaining</button>` : ''}
             </div>
             <div class="stepper-row">
               <button type="button" class="tap-chip" data-action="nudge-weight" data-ex="${ex.id}" data-idx="${selIdx}" data-delta="-${largeStep}">-${largeStep}</button>
@@ -1714,7 +1893,7 @@ function renderTrainView({ overrideExpandedIds = null } = {}) {
               <button type="button" class="tap-chip" data-action="nudge-weight" data-ex="${ex.id}" data-idx="${selIdx}" data-delta="${smallStep}">+${smallStep}</button>
               <button type="button" class="tap-chip" data-action="nudge-weight" data-ex="${ex.id}" data-idx="${selIdx}" data-delta="${largeStep}">+${largeStep}</button>
             </div>
-            ${showBarbellPlates ? `<div class="muted-sm tabular" data-plate-for="${ex.id}_${selIdx}">${plateText ? escapeHtml(plateText) : ''}</div>` : ''}
+            ${showBarbellPlates ? `<div data-plate-for="${ex.id}_${selIdx}">${renderBarbellPlateChips(platesPerSide)}</div>` : ''}
           </div>
 
           <div class="control-group">
@@ -1722,7 +1901,7 @@ function renderTrainView({ overrideExpandedIds = null } = {}) {
               <span>${ex.leftFirst ? 'Left-Arm Reps (Stop Right at same)' : `Reps (Target ${ex.repMin === ex.repMax ? ex.repMax : `${ex.repMin}–${ex.repMax}`})`}</span>
               <span class="tabular">${rNum} reps</span>
             </div>
-            <div class="tap-chips-row">
+            <div class="rep-chips-grid ${repTotalChips <= 6 ? 'cols-compact' : 'cols-4'}">
               <button type="button" class="tap-chip" data-action="nudge-reps" data-ex="${ex.id}" data-idx="${selIdx}" data-delta="-1" aria-label="Decrease reps">-1</button>
               ${repOptions.map((r) => `
                 <button type="button" class="tap-chip ${rNum === r ? 'is-active' : ''}" data-action="pick-reps" data-ex="${ex.id}" data-idx="${selIdx}" data-val="${r}">${r}</button>
@@ -1795,16 +1974,16 @@ function renderTrainView({ overrideExpandedIds = null } = {}) {
 
   return `
     ${lastSavedBanner ? `
-      <section class="card" style="border-color: var(--primary);">
+      <section class="card" style="border-color: var(--success);">
         <div class="row-between">
           <div>
-            <h2 class="card-title" style="color:var(--primary);">Session Saved: ${escapeHtml(lastSavedBanner.workoutName)}</h2>
+            <h2 class="card-title text-success">Session Saved: ${escapeHtml(lastSavedBanner.workoutName)}</h2>
             <p class="card-meta">${lastSavedBanner.totalSetsDone} sets${lastSavedBanner.durationMin ? ` · ${lastSavedBanner.durationMin} min` : ''}${lastSavedBanner.conditioningNote ? ` · ${escapeHtml(lastSavedBanner.conditioningNote)}` : ''}</p>
           </div>
           <button type="button" class="btn btn-sm btn-icon btn-ghost" aria-label="Dismiss session summary" data-action="dismiss-saved-banner">${icon('close')}</button>
         </div>
         ${lastSavedBanner.progressions?.length
-          ? `<div class="tag tag-accent" style="margin-top:8px;white-space:normal;">${icon('flame')} <span>Unlocked next session: ${lastSavedBanner.progressions.map(escapeHtml).join(' · ')}</span></div>`
+          ? `<div class="tag tag-info" style="margin-top:8px;white-space:normal;">${icon('flame')} <span>Unlocked next session: ${lastSavedBanner.progressions.map(escapeHtml).join(' · ')}</span></div>`
           : ''}
       </section>
     ` : ''}
@@ -1823,9 +2002,12 @@ function renderTrainView({ overrideExpandedIds = null } = {}) {
           <h2 class="card-title">${escapeHtml(workout.dayLabel)}</h2>
           <p class="card-meta">${escapeHtml(workout.focus)} · ${escapeHtml(workout.estMinutes)}</p>
         </div>
-        <div class="row-wrap" style="flex-wrap:nowrap;flex-shrink:0;">
+        <div class="row-wrap" style="flex-wrap:nowrap;flex-shrink:0;gap:6px;">
+          <button type="button" class="btn btn-sm btn-icon" style="width:36px;height:36px;" aria-label="Quick rest timer presets" title="Quick Rest Timer" data-action="open-rest-presets">
+            ${icon('timer')}
+          </button>
           <button type="button" class="btn btn-sm" data-action="open-plan-editor" data-workout="${workoutId}">Edit Plan</button>
-          <button type="button" class="btn btn-sm btn-icon" aria-label="Workout settings" title="Workout Settings" data-action="open-workout-settings">
+          <button type="button" class="btn btn-sm btn-icon" style="width:36px;height:36px;" aria-label="Workout settings" title="Workout Settings" data-action="open-workout-settings">
             ${icon('sliders')}
           </button>
         </div>
@@ -1836,7 +2018,7 @@ function renderTrainView({ overrideExpandedIds = null } = {}) {
           <span>Session #${workoutBrief.runNumber} · ${escapeHtml(PHASES[phase].label)} (Wk ${todayInfo.weekNum})</span>
         </div>
         <div class="muted-sm">${escapeHtml(workoutBrief.lastSummary)}</div>
-        <div style="font-size:0.875rem;font-weight:600;color:var(--primary);">${escapeHtml(workoutBrief.todayGoal)}</div>
+        <div class="text-info" style="font-size:0.875rem;font-weight:600;">${escapeHtml(workoutBrief.todayGoal)}</div>
       </div>
 
       <div class="row-between" style="margin-top:12px;gap:12px;flex-wrap:wrap;">
@@ -1869,10 +2051,10 @@ function renderTrainView({ overrideExpandedIds = null } = {}) {
           </div>
           <div class="row-wrap" style="justify-content:flex-end;flex-shrink:0;">
             ${prehabBothDone
-              ? `<span class="tag tag-accent">${icon('check')} Complete</span>`
+              ? `<span class="tag tag-success">${icon('check')} Complete</span>`
               : prehabSkipped
                 ? `<span class="tag">Skipped</span><button type="button" class="btn btn-sm" data-action="toggle-skip-prehab">Undo</button>`
-                : `<span class="tag tag-accent">Right Cuff Guard</span><button type="button" class="btn btn-sm" data-action="toggle-skip-prehab">Skip</button>`}
+                : `<span class="tag tag-info">Right Cuff Guard</span><button type="button" class="btn btn-sm" data-action="toggle-skip-prehab">Skip</button>`}
           </div>
         </div>
         ${prehabCollapsed ? '' : `
@@ -1937,12 +2119,12 @@ function renderWeightSvgChart(series) {
   if (!series || series.length === 0) {
     return '<div class="muted-sm">No weight entries logged yet.</div>';
   }
-  const w = 560;
-  const h = 210;
-  const padL = 42;
-  const padR = 16;
-  const padT = 18;
-  const padB = 34;
+  const w = 360;
+  const h = 185;
+  const padL = 34;
+  const padR = 14;
+  const padT = 16;
+  const padB = 28;
   const cw = w - padL - padR;
   const ch = h - padT - padB;
 
@@ -1965,37 +2147,54 @@ function renderWeightSvgChart(series) {
     : '';
 
   const yTicks = [minW, Math.round((minW + maxW) / 2), maxW];
+  const activeIdx = selectedChartIdx !== null && selectedChartIdx >= 0 && selectedChartIdx < series.length
+    ? selectedChartIdx
+    : series.length - 1;
+  const activePt = series[activeIdx];
+  const activeDelta = Number((activePt.rollingAvg - PLAN_CONFIG.profile.startWeight).toFixed(1));
 
   return `
+    <div class="chart-readout">
+      <strong class="tabular">${escapeHtml(formatHumanDate(activePt.date))}</strong>
+      <span class="tabular">Scale: <strong>${activePt.weight} lb</strong> · <span class="text-info">7d Avg: <strong>${activePt.rollingAvg} lb</strong> (${activeDelta > 0 ? '+' : ''}${activeDelta})</span></span>
+    </div>
     <svg viewBox="0 0 ${w} ${h}" style="width:100%;height:auto;display:block;" role="img" aria-label="Scale weight and 7-day rolling average chart">
-      <rect x="${padL}" y="${targetTopY}" width="${cw}" height="${Math.max(4, targetBotY - targetTopY)}" fill="var(--primary-soft)" />
-      <text x="${padL + 6}" y="${targetTopY + 13}" font-size="11" font-weight="600" fill="var(--primary)">90d Target: 173–177 lbs</text>
+      <rect x="${padL}" y="${targetTopY}" width="${cw}" height="${Math.max(4, targetBotY - targetTopY)}" fill="var(--info-soft)" />
+      <text x="${padL + 6}" y="${targetTopY + 13}" font-size="11" font-weight="600" fill="var(--info)">90d Target: 173–177 lbs</text>
 
       ${yTicks.map((t) => {
         const y = yFor(t);
         return `
           <line x1="${padL}" y1="${y}" x2="${w - padR}" y2="${y}" stroke="var(--border-subtle)" stroke-dasharray="3 3" />
-          <text x="${padL - 6}" y="${y + 4}" text-anchor="end" font-size="11" fill="var(--text-muted)">${t}</text>
+          <text x="${padL - 5}" y="${y + 4}" text-anchor="end" font-size="11" fill="var(--text-muted)">${t}</text>
         `;
       }).join('')}
 
-      ${avgAreaPath ? `<path d="${avgAreaPath}" fill="var(--primary)" opacity="0.12" />` : ''}
+      ${avgAreaPath ? `<path d="${avgAreaPath}" fill="var(--info)" opacity="0.12" />` : ''}
       ${series.length > 1 ? `<polyline fill="none" stroke="var(--text-dim)" stroke-width="1.5" stroke-dasharray="3 3" points="${rawPoints}" />` : ''}
-      ${series.length > 1 ? `<polyline fill="none" stroke="var(--primary)" stroke-width="2" points="${avgPoints}" />` : ''}
+      ${series.length > 1 ? `<polyline fill="none" stroke="var(--info)" stroke-width="2.2" points="${avgPoints}" />` : ''}
 
-      ${series.map((p, i) => `
-        <circle cx="${xFor(i)}" cy="${yFor(p.weight)}" r="3.5" fill="var(--text-muted)">
-          <title>${p.date}: ${p.weight} lbs (7d avg ${p.rollingAvg})</title>
-        </circle>
-        <circle cx="${xFor(i)}" cy="${yFor(p.rollingAvg)}" r="4" fill="var(--primary)">
-          <title>${p.date}: 7d avg ${p.rollingAvg} lbs</title>
-        </circle>
-      `).join('')}
+      ${series.map((p, i) => {
+        const isSel = i === activeIdx;
+        const cx = xFor(i).toFixed(1);
+        const cyAvg = yFor(p.rollingAvg).toFixed(1);
+        const cyRaw = yFor(p.weight).toFixed(1);
+        return `
+          ${isSel ? `<line x1="${cx}" y1="${padT}" x2="${cx}" y2="${padT + ch}" stroke="var(--info)" stroke-opacity="0.35" stroke-dasharray="2 2" />` : ''}
+          <circle cx="${cx}" cy="${cyRaw}" r="${isSel ? '4' : '3'}" fill="var(--text-muted)" />
+          <circle cx="${cx}" cy="${cyAvg}" r="${isSel ? '5.5' : '3.8'}" fill="var(--info)" stroke="${isSel ? 'var(--surface)' : 'none'}" stroke-width="2" />
+          <circle class="chart-hit" cx="${cx}" cy="${cyAvg}" r="14" fill="transparent" data-action="select-chart-point" data-idx="${i}">
+            <title>${p.date}: ${p.weight} lbs (7d avg ${p.rollingAvg})</title>
+          </circle>
+        `;
+      }).join('')}
 
-      <text x="${padL}" y="${h - 10}" font-size="11" fill="var(--text-muted)">${series[0].date}</text>
-      ${series.length > 1 ? `<text x="${w - padR}" y="${h - 10}" text-anchor="end" font-size="11" fill="var(--text-muted)">${series[series.length - 1].date}</text>` : ''}
+      <text x="${padL}" y="${h - 8}" font-size="11" fill="var(--text-muted)">${series[0].date.slice(5)}</text>
+      ${series.length > 1 ? `<text x="${w - padR}" y="${h - 8}" text-anchor="end" font-size="11" fill="var(--text-muted)">${series[series.length - 1].date.slice(5)}</text>` : ''}
     </svg>
-    ${series.length < 3 ? `<div class="muted-sm" style="margin-top:8px;">Log ${3 - series.length} more morning weigh-in${3 - series.length === 1 ? '' : 's'} to draw your 7-day rolling trend line.</div>` : ''}
+    ${series.length < 3
+      ? `<div class="muted-sm" style="margin-top:8px;">Log ${3 - series.length} more morning weigh-in${3 - series.length === 1 ? '' : 's'} to draw your 7-day rolling trend line.</div>`
+      : '<div class="muted-sm" style="margin-top:6px;">Tap any dot on the chart to inspect that day\'s scale weight &amp; 7-day average.</div>'}
   `;
 }
 
@@ -2072,37 +2271,37 @@ function renderProgressView() {
   const adherence = get7DayAdherence();
 
   const statusTagClass = adjustment.status === 'on_track'
-    ? 'tag-accent'
+    ? 'tag-success'
     : adjustment.status === 'creatine_caveat'
-      ? 'tag-accent'
+      ? 'tag-info'
       : adjustment.status === 'need_data'
         ? ''
         : 'tag-warn';
 
   return `
     ${lastSavedBanner ? `
-      <section class="card" style="border-color: var(--primary);">
+      <section class="card" style="border-color: var(--success);">
         <div class="row-between">
           <div>
-            <h2 class="card-title" style="color:var(--primary);">Session Saved: ${escapeHtml(lastSavedBanner.workoutName)}</h2>
+            <h2 class="card-title text-success">Session Saved: ${escapeHtml(lastSavedBanner.workoutName)}</h2>
             <p class="card-meta">${lastSavedBanner.totalSetsDone} sets${lastSavedBanner.durationMin ? ` · ${lastSavedBanner.durationMin} min` : ''}${lastSavedBanner.conditioningNote ? ` · ${escapeHtml(lastSavedBanner.conditioningNote)}` : ''}</p>
           </div>
           <button type="button" class="btn btn-sm btn-icon btn-ghost" aria-label="Dismiss session summary" data-action="dismiss-saved-banner">${icon('close')}</button>
         </div>
         ${lastSavedBanner.progressions?.length
-          ? `<div class="tag tag-accent" style="margin-top:8px;white-space:normal;">${icon('flame')} <span>Unlocked next session: ${lastSavedBanner.progressions.map(escapeHtml).join(' · ')}</span></div>`
+          ? `<div class="tag tag-info" style="margin-top:8px;white-space:normal;">${icon('flame')} <span>Unlocked next session: ${lastSavedBanner.progressions.map(escapeHtml).join(' · ')}</span></div>`
           : ''}
       </section>
     ` : ''}
 
     <section class="card">
-      <div class="card-header">
-        <div>
-          <h2 class="card-title">Quick Morning Weigh-In &amp; Waist Check</h2>
-          <p class="card-meta">Nudge from last entry with 1 tap (no typing required)</p>
+      <div class="card-header card-header-inline">
+        <div style="min-width:0;">
+          <h2 class="card-title">Quick Morning Weigh-In &amp; Waist</h2>
+          <p class="card-meta">Nudge from last entry with 1 tap</p>
         </div>
-        <button type="button" class="btn btn-sm" data-action="log-photo">
-          ${state.photoLogs.includes(localTodayIso()) ? `${icon('check')} Photos Logged` : '+ Log Photos'}
+        <button type="button" class="btn btn-sm ${state.photoLogs.includes(localTodayIso()) ? 'tag-success' : ''}" data-action="log-photo">
+          ${state.photoLogs.includes(localTodayIso()) ? `${icon('check')} Photos` : '+ Photos'}
         </button>
       </div>
 
@@ -2193,8 +2392,8 @@ function renderProgressView() {
         </div>
         <div class="row-wrap">
           <span class="tag">Latest: ${latest.weight} lb</span>
-          <span class="tag tag-accent">7d Avg: ${latest.rollingAvg} lb (${deltaBaseline > 0 ? '+' : ''}${deltaBaseline})</span>
-          ${latestWaist ? `<span class="tag tag-accent">Waist: ${latestWaist.waist}"</span>` : ''}
+          <span class="tag tag-info">7d Avg: ${latest.rollingAvg} lb (${deltaBaseline > 0 ? '+' : ''}${deltaBaseline})</span>
+          ${latestWaist ? `<span class="tag tag-info">Waist: ${latestWaist.waist}"</span>` : ''}
         </div>
       </div>
       ${renderWeightSvgChart(series)}
@@ -2213,7 +2412,7 @@ function renderProgressView() {
             </button>
           `).join('')}
           ${[...sortedWaists].reverse().slice(0, 6).map((wz) => `
-            <button type="button" class="btn btn-sm tag-accent" data-action="delete-waist" data-date="${wz.date}" title="Remove waist log">
+            <button type="button" class="btn btn-sm tag-info" data-action="delete-waist" data-date="${wz.date}" title="Remove waist log">
               <span class="tabular">${wz.date.slice(5)}: ${wz.waist}"</span>
               ${icon('close')}
             </button>
@@ -2239,22 +2438,25 @@ function renderProgressView() {
         ${Object.values(PLAN_CONFIG.strengthTargets).map((t) => {
           const curr = bestBig3[t.key];
           const maxGoal = t.stretch || t.targetMax;
-          const pct = Math.min(100, Math.max(0, Math.round(((curr - t.baseline) / (maxGoal - t.baseline)) * 100)));
-          const ratio = Math.min(1, Math.max(0.05, curr / maxGoal));
+          const spanGoal = Math.max(1, maxGoal - t.baseline);
+          const pct = Math.min(100, Math.max(0, Math.round(((curr - t.baseline) / spanGoal) * 100)));
+          const ratio = pct / 100;
+          const minTickPct = Math.min(96, Math.max(4, Math.round(((t.targetMin - t.baseline) / spanGoal) * 100)));
           return `
             <div class="logger-section">
-              <div class="row-between" style="margin-bottom:8px;flex-wrap:wrap;gap:4px;">
-                <span style="font-weight:700;font-size:0.875rem;">${escapeHtml(t.label)} (${escapeHtml(t.repLabel)})</span>
+              <div class="row-between" style="margin-bottom:6px;flex-wrap:wrap;gap:4px;">
+                <span style="font-weight:700;font-size:0.9375rem;">${escapeHtml(t.label)} (${escapeHtml(t.repLabel)})</span>
                 <span class="tabular" style="font-size:0.8125rem;">
                   <strong>${curr} ${escapeHtml(t.unit || 'lbs')}</strong> <span class="muted-sm">/ Target ${t.targetMin}–${t.targetMax}${t.stretch ? ` (${t.stretch} stretch)` : ''}</span>
                 </span>
               </div>
-              <div class="bar-track">
-                <div class="bar-fill" style="transform: scaleX(${ratio.toFixed(4)});"></div>
+              <div class="bar-track bar-track-goal">
+                <div class="bar-fill" style="transform: scaleX(${ratio.toFixed(4)});background:${pct >= 100 ? 'var(--success)' : 'var(--info)'};"></div>
+                <div class="bar-target-tick" style="left:${minTickPct}%;" title="Minimum 90-day target (${t.targetMin})"></div>
               </div>
               <div class="row-between muted-sm" style="margin-top:4px;">
                 <span>Start: ${t.baseline} ${escapeHtml(t.unit || 'lbs')}${bestE1rm[t.key] ? ` · Best e1RM ~${bestE1rm[t.key]} lbs` : ''}</span>
-                <span>${pct}% toward max goal</span>
+                <span class="tabular">${pct}% toward goal</span>
               </div>
             </div>
           `;
@@ -2288,7 +2490,7 @@ function renderProgressView() {
                       <button type="button" class="btn btn-sm btn-icon btn-ghost" aria-label="Delete session" data-action="delete-history" data-id="${escapeHtml(h.id)}">${icon('close')}</button>
                     </div>
                   </div>
-                  ${h.progressions?.length ? `<div class="muted-sm" style="margin-top:4px;color:var(--primary);">Ready to progress: ${h.progressions.map(escapeHtml).join(' · ')}</div>` : ''}
+                  ${h.progressions?.length ? `<div class="muted-sm text-info" style="margin-top:4px;font-weight:600;">Ready to progress: ${h.progressions.map(escapeHtml).join(' · ')}</div>` : ''}
                   ${h.adherenceSummary ? `<div class="muted-sm" style="margin-top:4px;color:${h.adherenceSummary.deviatedCount > 0 ? 'var(--amber)' : 'var(--text-muted)'};">${h.adherenceSummary.deviatedCount > 0 ? `Modified (${h.adherenceSummary.deviatedCount}): ${h.adherenceSummary.deviations.map(escapeHtml).join(' · ')}` : 'Adherence: On Plan'}</div>` : ''}
                   ${isOpen ? `
                     <div class="panel-inset" style="margin-top:12px;">
@@ -2355,7 +2557,7 @@ function renderMarkdownHtml(md) {
       html += `<h3 style="margin:8px 0 4px;font-size:1rem;font-weight:700;">${inline(line.slice(2))}</h3>`;
     } else if (line.startsWith('## ')) {
       closeList();
-      html += `<h4 style="margin:12px 0 4px;font-size:0.875rem;font-weight:700;color:var(--primary);">${inline(line.slice(3))}</h4>`;
+      html += `<h4 style="margin:12px 0 4px;font-size:0.875rem;font-weight:700;color:var(--info);">${inline(line.slice(3))}</h4>`;
     } else if (line.startsWith('- ')) {
       if (!inList) {
         html += '<ul style="margin:4px 0 8px;padding-left:18px;display:flex;flex-direction:column;gap:4px;">';
@@ -2407,16 +2609,16 @@ function renderPlanView() {
 
   return `
     ${lastSavedBanner ? `
-      <section class="card" style="border-color: var(--primary);">
+      <section class="card" style="border-color: var(--success);">
         <div class="row-between">
           <div>
-            <h2 class="card-title" style="color:var(--primary);">Session Saved: ${escapeHtml(lastSavedBanner.workoutName)}</h2>
+            <h2 class="card-title text-success">Session Saved: ${escapeHtml(lastSavedBanner.workoutName)}</h2>
             <p class="card-meta">${lastSavedBanner.totalSetsDone} sets${lastSavedBanner.durationMin ? ` · ${lastSavedBanner.durationMin} min` : ''}${lastSavedBanner.conditioningNote ? ` · ${escapeHtml(lastSavedBanner.conditioningNote)}` : ''}</p>
           </div>
           <button type="button" class="btn btn-sm btn-icon btn-ghost" aria-label="Dismiss session summary" data-action="dismiss-saved-banner">${icon('close')}</button>
         </div>
         ${lastSavedBanner.progressions?.length
-          ? `<div class="tag tag-accent" style="margin-top:8px;white-space:normal;">${icon('flame')} <span>Unlocked next session: ${lastSavedBanner.progressions.map(escapeHtml).join(' · ')}</span></div>`
+          ? `<div class="tag tag-info" style="margin-top:8px;white-space:normal;">${icon('flame')} <span>Unlocked next session: ${lastSavedBanner.progressions.map(escapeHtml).join(' · ')}</span></div>`
           : ''}
       </section>
     ` : ''}
@@ -2463,8 +2665,8 @@ function renderPlanView() {
         ${NUTRITION.takeoutPlaybook.map((t) => `
           <div class="list-item">
             <div class="row-between" style="flex-wrap:wrap;gap:4px;">
-              <strong style="font-size:0.875rem;">${escapeHtml(t.name)}</strong>
-              <span class="tag tag-accent tabular">${escapeHtml(t.kcal)} kcal · ${escapeHtml(t.protein)}</span>
+              <strong style="font-size:0.9375rem;">${escapeHtml(t.name)}</strong>
+              <span class="tag tag-info tabular">${escapeHtml(t.kcal)} kcal · ${escapeHtml(t.protein)}</span>
             </div>
             <div class="muted-sm" style="margin-top:4px;">${escapeHtml(t.notes)}</div>
           </div>
@@ -2483,8 +2685,8 @@ function renderPlanView() {
         ${NUTRITION.sampleMeals.map((m) => `
           <div class="list-item">
             <div class="row-between" style="flex-wrap:wrap;gap:4px;">
-              <strong style="font-size:0.875rem;">${escapeHtml(m.name)}</strong>
-              <span class="tag tag-accent tabular">${m.kcal} kcal · ${m.protein}g P · ${escapeHtml(m.prep)}</span>
+              <strong style="font-size:0.9375rem;">${escapeHtml(m.name)}</strong>
+              <span class="tag tag-info tabular">${m.kcal} kcal · ${m.protein}g P · ${escapeHtml(m.prep)}</span>
             </div>
             <div class="muted-sm" style="margin-top:4px;">${escapeHtml(m.notes)}</div>
           </div>
@@ -2528,7 +2730,7 @@ function renderPlanView() {
             <div class="row-between" style="flex-wrap:wrap;gap:8px;">
               <div>
                 <div style="font-weight:700;font-size:0.875rem;">
-                  <span class="tag ${v.versionId === state.activePlanVersionId ? 'tag-accent' : ''}" style="margin-right:6px;">${escapeHtml(v.versionId)}</span>
+                  <span class="tag ${v.versionId === state.activePlanVersionId ? 'tag-success' : ''}" style="margin-right:6px;">${escapeHtml(v.versionId)}</span>
                   ${escapeHtml(v.note)}
                 </div>
                 <div class="muted-sm" style="margin-top:4px;">${escapeHtml(v.effectiveDate)} · Week ${v.planWeek} (Day ${v.planDay}) · ${escapeHtml(PHASES[v.phase]?.label || v.phase)}</div>
@@ -2583,7 +2785,11 @@ function renderPlanView() {
           Import JSON Backup
           <input type="file" accept="application/json,.json" id="import-json-input" style="display:none;" />
         </label>
-        <button type="button" class="btn" data-action="reset-data">Reset All Data</button>
+      </div>
+      <div class="divider" style="margin:14px 0;"></div>
+      <div class="row-between" style="flex-wrap:wrap;gap:8px;">
+        <span class="muted-sm">Start fresh from baseline (export backup first)</span>
+        <button type="button" class="btn btn-sm btn-danger" data-action="reset-data">Reset All Data</button>
       </div>
     </section>
   `;
@@ -2952,6 +3158,31 @@ document.addEventListener('click', (e) => {
     state.activeTab = 'progress';
     saveState();
     renderMainWithTransition({ focusMain: true });
+  } else if (action === 'open-quick-weighin') {
+    openQuickWeighInModal(state.selectedDate);
+  } else if (action === 'save-quick-weight') {
+    const dateVal = document.getElementById('quick-weight-date')?.value || state.selectedDate || localTodayIso();
+    const weightVal = Number(document.getElementById('quick-weight-val')?.value);
+    if (!Number.isFinite(weightVal) || weightVal < 70 || weightVal > 450) {
+      showToast('Enter a valid scale weight in lbs.');
+      return;
+    }
+    const existingIdx = state.weightLogs.findIndex((w) => w.date === dateVal);
+    if (existingIdx >= 0) state.weightLogs[existingIdx].weight = weightVal;
+    else state.weightLogs.push({ date: dateVal, weight: weightVal });
+    ensureDailyLog(dateVal).weighInSkipped = false;
+    pendingWeightInput = weightVal;
+    selectedChartIdx = null;
+    saveState();
+    closeModal();
+    showToast(`Logged ${weightVal} lbs for ${formatHumanDate(dateVal)}`);
+    renderMain();
+  } else if (action === 'select-strip-date') {
+    if (target.dataset.date) {
+      state.selectedDate = target.dataset.date;
+      saveState();
+      renderMain();
+    }
   } else if (action === 'toggle-skip-weighin') {
     const log = ensureDailyLog(state.selectedDate);
     log.weighInSkipped = !log.weighInSkipped;
@@ -3087,7 +3318,45 @@ document.addEventListener('click', (e) => {
     unlockAudio();
     const draft = ensureWorkoutDraft(state.activeWorkoutId);
     draft.startedAt = Date.now();
+    const switchedDay = ensureTodayLiftingDay();
     saveState();
+    if (switchedDay) showToast('Clock started · Today switched to Lifting Day');
+    renderMain();
+  } else if (action === 'open-rest-presets') {
+    openRestPresetsModal(target.dataset.label || (timer.active ? timer.label : ''));
+  } else if (action === 'pick-rest-preset') {
+    unlockAudio();
+    const sec = Number(target.dataset.sec) || 90;
+    const label = target.dataset.label || 'Manual Rest';
+    closeModal();
+    startRestTimer(sec, label);
+  } else if (action === 'open-exercise-note') {
+    openExerciseNoteModal(target.dataset.ex, target.dataset.name || 'Exercise');
+  } else if (action === 'save-exercise-note') {
+    const exId = target.dataset.ex;
+    const val = String(document.getElementById('exercise-note-input')?.value || '').trim();
+    if (!state.exerciseNotes) state.exerciseNotes = {};
+    if (val) state.exerciseNotes[exId] = val;
+    else delete state.exerciseNotes[exId];
+    saveState();
+    closeModal();
+    showToast(val ? 'Saved setup note' : 'Cleared setup note');
+    renderMain();
+  } else if (action === 'clear-exercise-note') {
+    const exId = target.dataset.ex;
+    if (state.exerciseNotes) delete state.exerciseNotes[exId];
+    saveState();
+    closeModal();
+    showToast('Cleared setup note');
+    renderMain();
+  } else if (action === 'open-exercise-history') {
+    openExerciseHistoryModal(target.dataset.ex, target.dataset.name || 'Exercise', target.dataset.default || target.dataset.name || 'Exercise');
+  } else if (action === 'toggle-why-inline') {
+    const exId = target.dataset.ex;
+    openWhyByEx[exId] = !openWhyByEx[exId];
+    renderMain();
+  } else if (action === 'select-chart-point') {
+    selectedChartIdx = Number(target.dataset.idx);
     renderMain();
   } else if (action === 'reset-session') {
     const workoutId = state.activeWorkoutId;
@@ -3366,7 +3635,11 @@ document.addEventListener('click', (e) => {
     const workoutsMap = getWorkouts();
     const workout = workoutsMap[workoutId];
     const draft = ensureWorkoutDraft(workoutId);
-    if (!draft.startedAt) draft.startedAt = Date.now();
+    let switchedDay = false;
+    if (!draft.startedAt) {
+      draft.startedAt = Date.now();
+      switchedDay = ensureTodayLiftingDay();
+    }
     const exId = target.dataset.ex;
     const ex = workout.exercises.find((x) => x.id === exId);
     const activeName = state.swapsBySlot[exId] || ex?.name;
@@ -3419,6 +3692,9 @@ document.addEventListener('click', (e) => {
       msgs.push(prog.message);
     } else if (wasDone && anyPendingSetsLeft && !supersetMovedToPartner) {
       msgs.push(`Updated Set ${idx + 1}`);
+    }
+    if (switchedDay) {
+      msgs.push('Today → Lifting Day');
     }
     if (msgs.length > 0) showToast(msgs.join(' · '));
     if (switchedExercise) {
@@ -3556,8 +3832,8 @@ document.addEventListener('click', (e) => {
   } else if (action === 'nudge-quick-metric') {
     const metric = target.dataset.metric;
     const delta = Number(target.dataset.delta);
-    if (metric === 'weight') {
-      const input = document.getElementById('weight-val-input');
+    if (metric === 'weight' || metric === 'quick-weight') {
+      const input = document.getElementById(metric === 'quick-weight' ? 'quick-weight-val' : 'weight-val-input');
       const curr = Number(input?.value ?? pendingWeightInput ?? 185);
       pendingWeightInput = Number(Math.max(70, Math.min(450, curr + delta)).toFixed(1));
       if (input) input.value = pendingWeightInput.toFixed(1);
@@ -3577,9 +3853,11 @@ document.addEventListener('click', (e) => {
     const existingIdx = state.weightLogs.findIndex((w) => w.date === dateVal);
     if (existingIdx >= 0) state.weightLogs[existingIdx].weight = weightVal;
     else state.weightLogs.push({ date: dateVal, weight: weightVal });
+    ensureDailyLog(dateVal).weighInSkipped = false;
     pendingWeightInput = weightVal;
+    selectedChartIdx = null;
     saveState();
-    showToast(`Logged ${weightVal} lbs for ${dateVal}`);
+    showToast(`Logged ${weightVal} lbs for ${formatHumanDate(dateVal)}`);
     renderMain();
   } else if (action === 'add-waist') {
     const dateVal = document.getElementById('waist-date-input').value || localTodayIso();
@@ -3601,10 +3879,12 @@ document.addEventListener('click', (e) => {
     const prevLogs = structuredClone(state.weightLogs);
     state.weightLogs = state.weightLogs.filter((w) => w.date !== dateVal);
     pendingWeightInput = null;
+    selectedChartIdx = null;
     saveState();
     showToast(`Removed weigh-in (${dateVal})`, () => {
       state.weightLogs = prevLogs;
       pendingWeightInput = null;
+      selectedChartIdx = null;
       saveState();
       renderMain();
     });
@@ -3852,6 +4132,8 @@ document.addEventListener('click', (e) => {
       pendingWeightInput = null;
       pendingWaistInput = null;
       expandedHistoryId = null;
+      selectedChartIdx = null;
+      openWhyByEx = {};
       saveState();
       renderMain();
       showToast('Tracker reset to baseline', () => {
@@ -3897,9 +4179,7 @@ document.addEventListener('input', (e) => {
         const plateEl = document.querySelector(`[data-plate-for="${exId}_${idx}"]`);
         if (plateEl) {
           const plates = computeBarbellPlatesPerSide(Number(row.weight) || 0);
-          plateEl.textContent = plates
-            ? (plates.length ? `Per side (45 bar): ${plates.join(' + ')}` : 'Empty 45 lb barbell')
-            : '';
+          plateEl.innerHTML = renderBarbellPlateChips(plates);
         }
       }
     }
@@ -3916,7 +4196,7 @@ document.addEventListener('input', (e) => {
       const isNum = field === 'sets' || field === 'repMin' || field === 'repMax' || field === 'restSec';
       planEditorDraft.exercises[idx][field] = isNum ? Number(target.value) : target.value;
     }
-  } else if (target.id === 'weight-val-input') {
+  } else if (target.id === 'weight-val-input' || target.id === 'quick-weight-val') {
     pendingWeightInput = target.value;
   } else if (target.id === 'waist-val-input') {
     pendingWaistInput = target.value;
@@ -3941,6 +4221,8 @@ document.addEventListener('change', (e) => {
         pendingWeightInput = null;
         pendingWaistInput = null;
         expandedHistoryId = null;
+        selectedChartIdx = null;
+        openWhyByEx = {};
         lastSavedBanner = null;
         saveState();
         renderMain();

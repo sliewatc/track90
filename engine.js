@@ -994,6 +994,7 @@ export function normalizeRestoredState(parsed, base) {
     ...parsed,
     dailyLogs: safeObj(parsed.dailyLogs, {}),
     swapsBySlot: safeObj(parsed.swapsBySlot, {}),
+    exerciseNotes: safeObj(parsed.exerciseNotes, {}),
     lastPerformance: safeObj(parsed.lastPerformance, {}),
     draftWorkouts: safeObj(parsed.draftWorkouts, {}),
     activeRestTimer: normalizeRestTimerState(parsed.activeRestTimer),

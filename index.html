@@ -30,7 +30,7 @@
           </div>
         </div>
         <div class="header-actions">
-          <button type="button" id="install-btn" class="btn btn-sm btn-primary" style="display:none;">Install</button>
+          <button type="button" id="install-btn" class="btn btn-sm" style="display:none;">Install</button>
           <button type="button" id="phase-pill-btn" class="btn btn-sm" title="Switch Training Phase"></button>
           <div class="theme-dropdown" id="theme-dropdown">
             <button type="button" id="theme-btn" class="btn btn-sm theme-trigger" aria-haspopup="listbox" aria-expanded="false" aria-label="Color scheme"></button>
@@ -52,10 +52,13 @@
 
   <!-- Persistent Rest Timer Dock -->
   <aside id="rest-dock" class="rest-dock hidden" aria-label="Rest timer">
+    <div class="rest-dock-progress" aria-hidden="true">
+      <div id="rest-progress-bar" class="bar-fill" style="transform: scaleX(1); background: var(--amber);"></div>
+    </div>
     <div class="rest-dock-head">
       <div class="rest-dock-info">
         <div class="rest-ex-name" id="rest-ex-name">Rest Timer</div>
-        <div class="rest-time tabular" id="rest-countdown">01:30</div>
+        <button type="button" class="rest-time-btn tabular" id="rest-countdown" data-action="open-rest-presets" title="Tap for quick rest presets">01:30</button>
       </div>
       <button type="button" class="btn btn-sm rest-chime-btn" id="rest-alert-mode" aria-pressed="true" title="Toggle rest chime"></button>
     </div>
@@ -64,9 +67,6 @@
       <button type="button" class="btn btn-sm" id="rest-plus">+15s</button>
       <button type="button" class="btn btn-sm btn-amber" id="rest-toggle">Pause</button>
       <button type="button" class="btn btn-sm btn-ghost" id="rest-stop">Done</button>
-    </div>
-    <div class="bar-track">
-      <div id="rest-progress-bar" class="bar-fill" style="transform: scaleX(1); background: var(--amber);"></div>
     </div>
   </aside>
 

@@ -12,6 +12,7 @@ import {
   evaluateBiweeklyAdjustment,
   getPerfKey,
   getLastPerfEntry,
+  getExerciseHistoryTrail,
   estimate1RM,
   computeExerciseTargetHint,
   computeNextSessionDefaults,
@@ -521,4 +522,40 @@ test('rest timer state machine handles reload hydration, -15s completion, pause/
   // Reloading drops timers expired >4 hours ago
   const ancient = normalizeRestTimerState({ ...running, endAtMs: t0 - 5 * 3600 * 1000 }, t0);
   assert.deepEqual(ancient, createDefaultRestTimerState());
+});
+
+test('normalizeRestoredState preserves exerciseNotes and getExerciseHistoryTrail tracks lift history', () => {
+  const restored = normalizeRestoredState(
+    {
+      version: 1,
+      dailyLogs: {},
+      workoutHistory: [],
+      weightLogs: [{ date: '2026-11-24', weight: 185 }],
+      exerciseNotes: { ua_bench: 'Pin #4, tuck elbows' }
+    },
+    { version: 4, dailyLogs: {}, workoutHistory: [], weightLogs: [], waistLogs: [], photoLogs: [], swapsBySlot: {}, exerciseNotes: {}, lastPerformance: {}, draftWorkouts: {}, customWorkouts: null, activePlanVersionId: 'v1', planVersions: [{ versionId: 'v1' }] }
+  );
+  assert.deepEqual(restored.exerciseNotes, { ua_bench: 'Pin #4, tuck elbows' });
+
+  const corruptNotes = normalizeRestoredState(
+    { version: 1, dailyLogs: {}, workoutHistory: [], weightLogs: [], exerciseNotes: ['bad'] },
+    { version: 4, dailyLogs: {}, workoutHistory: [], weightLogs: [], waistLogs: [], photoLogs: [], swapsBySlot: {}, exerciseNotes: {}, lastPerformance: {}, draftWorkouts: {}, customWorkouts: null, activePlanVersionId: 'v1', planVersions: [{ versionId: 'v1' }] }
+  );
+  assert.deepEqual(corruptNotes.exerciseNotes, {});
+
+  const trail = getExerciseHistoryTrail([
+    {
+      date: '2026-11-24',
+      exercises: [{ exId: 'ua_bench', perfKey: 'ua_bench', sets: [{ weight: 135, reps: 7, rir: 1.5 }, { weight: 135, reps: 7, rir: 1.5 }] }]
+    },
+    {
+      date: '2026-11-28',
+      exercises: [{ exId: 'ua_bench', perfKey: 'ua_bench', sets: [{ weight: 145, reps: 6, rir: 1 }, { weight: 145, reps: 6, rir: 1 }] }]
+    }
+  ], 'ua_bench', 5);
+  assert.equal(trail.length, 2);
+  assert.equal(trail[0].maxW, 135);
+  assert.equal(trail[1].maxW, 145);
+  assert.equal(trail[1].totalReps, 12);
+  assert.ok(trail[1].bestE1rm > trail[0].bestE1rm);
 });
