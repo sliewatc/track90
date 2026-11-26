@@ -2589,46 +2589,20 @@ function renderPlanView() {
   `;
 }
 
-let activeAccordionScrollRaf = null;
-let activeAccordionCancelListeners = null;
+let activeAccordionCleanup = null;
 
-function cancelAccordionScroll() {
-  if (activeAccordionScrollRaf !== null) {
-    cancelAnimationFrame(activeAccordionScrollRaf);
-    activeAccordionScrollRaf = null;
+function cancelAccordionAnimations() {
+  if (typeof activeAccordionCleanup === 'function') {
+    const fn = activeAccordionCleanup;
+    activeAccordionCleanup = null;
+    fn();
   }
-  if (activeAccordionCancelListeners) {
-    activeAccordionCancelListeners();
-    activeAccordionCancelListeners = null;
-  }
-}
-
-function evalCubicBezier(t, x1, y1, x2, y2) {
-  if (t <= 0) return 0;
-  if (t >= 1) return 1;
-  const ax = 3 * x1 - 3 * x2 + 1;
-  const bx = 3 * x2 - 6 * x1;
-  const cx = 3 * x1;
-  const ay = 3 * y1 - 3 * y2 + 1;
-  const by = 3 * y2 - 6 * y1;
-  const cy = 3 * y1;
-  let lo = 0;
-  let hi = 1;
-  let u = t;
-  for (let i = 0; i < 14; i++) {
-    const x = ((ax * u + bx) * u + cx) * u;
-    if (Math.abs(x - t) < 1e-5) break;
-    if (x < t) lo = u;
-    else hi = u;
-    u = 0.5 * (lo + hi);
-  }
-  return ((ay * u + by) * u + cy) * u;
 }
 
 function syncExerciseAccordionInPlace(workout, draft, { targetExId = null, scrollToTarget = false } = {}) {
-  cancelAccordionScroll();
+  const main = document.getElementById('main-view');
   const cards = Array.from(document.querySelectorAll('.exercise-card[data-ex-card]'));
-  if (cards.length === 0) {
+  if (!main || cards.length === 0) {
     renderMain();
     return;
   }
@@ -2638,190 +2612,235 @@ function syncExerciseAccordionInPlace(workout, draft, { targetExId = null, scrol
     focusBtn.textContent = state.trainFocusMode ? 'Show all' : 'Focus active';
   }
 
+  const topItems = Array.from(main.children);
+  const supersetGroups = topItems.filter((el) => el.classList.contains('superset-group'));
+
+  // 1. FIRST: Measure live visual rects BEFORE canceling in-flight animations (seamless mid-flight interruption)
+  const beforeRects = new Map();
+  const prevExpandedMap = new Map();
+  const prevBodyHeightMap = new Map();
+  for (const el of topItems) {
+    beforeRects.set(el, el.getBoundingClientRect());
+  }
+  for (const card of cards) {
+    beforeRects.set(card, card.getBoundingClientRect());
+    const wasExp = card.classList.contains('is-expanded');
+    prevExpandedMap.set(card, wasExp);
+    const col = card.querySelector('.exercise-collapse');
+    prevBodyHeightMap.set(card, wasExp && col ? col.getBoundingClientRect().height : 0);
+  }
+
+  // Cancel any prior WAAPI animations & clean up temporary overlay classes
+  cancelAccordionAnimations();
+
+  // 2. LAST: Apply final DOM state in ONE synchronous pass (zero per-frame layout!)
   const nextExpandedSet = getExpandedExerciseIds(workout, draft);
   const targetCard = targetExId
     ? cards.find((c) => c.dataset.exCard === targetExId) || null
     : null;
 
-  const startScrollY = window.scrollY;
-  const headerEl = document.querySelector('.top-header');
-  const stickyOffset = Math.ceil((headerEl ? headerEl.offsetHeight : 0) + 12);
-  const startTargetDocTop = targetCard ? (targetCard.getBoundingClientRect().top + startScrollY) : 0;
-  const startScreenY = startTargetDocTop - startScrollY;
-
-  const changes = [];
+  const openingCards = [];
+  const closingCards = [];
   for (const card of cards) {
     const exId = card.dataset.exCard;
     const col = card.querySelector('.exercise-collapse');
-    const inner = card.querySelector('.exercise-collapse-inner');
     const toggleBtn = card.querySelector('.exercise-toggle');
-    if (!col || !inner) continue;
-
     const shouldExpand = nextExpandedSet.has(exId);
-    const wasExpanded = card.classList.contains('is-expanded');
-    const isAnimating = col.classList.contains('is-animating');
+    const wasExpanded = prevExpandedMap.get(card);
 
     card.classList.toggle('is-active', exId === draft.activeExId);
+    card.classList.toggle('is-expanded', shouldExpand);
+    card.classList.toggle('is-collapsed', !shouldExpand);
     if (toggleBtn) toggleBtn.setAttribute('aria-expanded', String(shouldExpand));
-
-    if (shouldExpand !== wasExpanded || isAnimating) {
-      const fromH = col.getBoundingClientRect().height;
-      const fromOp = parseFloat(getComputedStyle(col).opacity);
-      let toH = 0;
-      if (shouldExpand) {
-        const hadInert = col.hasAttribute('inert');
-        col.removeAttribute('inert');
-        col.style.transition = 'none';
-        col.style.visibility = 'visible';
-        col.style.height = 'auto';
-        toH = inner.getBoundingClientRect().height;
-        col.style.height = `${fromH}px`;
-        col.style.visibility = '';
-        if (hadInert) col.setAttribute('inert', '');
-      }
-      changes.push({
-        card,
-        col,
-        exId,
-        shouldExpand,
-        fromH,
-        toH,
-        fromOp: Number.isFinite(fromOp) ? fromOp : (fromH > 0 ? 1 : 0)
-      });
+    if (col) {
+      if (shouldExpand) col.removeAttribute('inert');
+      else col.setAttribute('inert', '');
     }
+
+    if (shouldExpand && !wasExpanded) openingCards.push(card);
+    else if (!shouldExpand && wasExpanded) closingCards.push(card);
   }
 
-  let deltaAbove = 0;
-  let deltaTotal = 0;
-  for (const c of changes) {
-    const diff = c.toH - c.fromH;
-    deltaTotal += diff;
-    if (targetCard && c.card !== targetCard && (c.card.compareDocumentPosition(targetCard) & Node.DOCUMENT_POSITION_FOLLOWING)) {
-      deltaAbove += diff;
+  // Commit final scroll position ONCE at Frame 0 so targetCard lands cleanly below sticky header
+  const headerEl = document.querySelector('.top-header');
+  const stickyOffset = Math.ceil((headerEl ? headerEl.offsetHeight : 0) + 12);
+  if (scrollToTarget && targetCard) {
+    const finalTargetDocTop = targetCard.getBoundingClientRect().top + window.scrollY;
+    const finalMaxScrollY = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+    const endScrollY = Math.max(0, Math.min(finalTargetDocTop - stickyOffset, finalMaxScrollY));
+    if (Math.abs(endScrollY - window.scrollY) >= 2) {
+      window.scrollTo(0, endScrollY);
     }
   }
-
-  const finalTargetDocTop = startTargetDocTop + deltaAbove;
-  const finalDocHeight = document.documentElement.scrollHeight + deltaTotal;
-  const finalMaxScrollY = Math.max(0, finalDocHeight - window.innerHeight);
-  const desiredScrollY = finalTargetDocTop - stickyOffset;
-  const endScrollY = Math.max(0, Math.min(desiredScrollY, finalMaxScrollY));
-  const endScreenY = finalTargetDocTop - endScrollY;
-  const shouldScroll = Boolean(
-    scrollToTarget &&
-    targetCard &&
-    (Math.abs(endScrollY - startScrollY) >= 4 || Math.abs(deltaAbove) >= 4)
-  );
 
   if (prefersReducedMotion()) {
-    for (const c of changes) {
-      c.col._animSeq = (c.col._animSeq || 0) + 1;
-      c.col.classList.remove('is-animating');
-      c.col.style.height = '';
-      c.col.style.opacity = '';
-      c.col.style.transition = '';
-      c.col.style.removeProperty('--ex-anim-dur');
-      c.col.style.removeProperty('--ex-op-dur');
-      c.col.style.removeProperty('--ex-anim-ease');
-      c.card.classList.toggle('is-expanded', c.shouldExpand);
-      c.card.classList.toggle('is-collapsed', !c.shouldExpand);
-      if (c.shouldExpand) c.col.removeAttribute('inert');
-      else c.col.setAttribute('inert', '');
-    }
-    if (shouldScroll) {
-      window.scrollTo({ top: endScrollY, behavior: 'auto' });
-    }
     return;
   }
 
-  const anyOpening = changes.some((c) => c.shouldExpand);
-  const durationMs = anyOpening ? 280 : 200;
-  const opDurMs = anyOpening ? 220 : 190;
-  const easeCss = anyOpening ? 'cubic-bezier(0.22, 1, 0.36, 1)' : 'cubic-bezier(0.4, 0, 1, 1)';
-  const bezier = anyOpening ? [0.22, 1, 0.36, 1] : [0.4, 0, 1, 1];
-
-  for (const c of changes) {
-    c.col._animSeq = (c.col._animSeq || 0) + 1;
-    c.col.style.transition = 'none';
-    c.col.style.height = `${c.fromH}px`;
-    c.col.style.opacity = String(c.fromOp);
-    c.col.style.visibility = 'visible';
-    c.col.classList.add('is-animating');
-    if (c.shouldExpand) c.col.removeAttribute('inert');
-    c.card.classList.toggle('is-expanded', c.shouldExpand);
-    c.card.classList.toggle('is-collapsed', !c.shouldExpand);
+  // 3. Measure final screen positions ONCE
+  const afterRects = new Map();
+  for (const el of topItems) {
+    afterRects.set(el, el.getBoundingClientRect());
+  }
+  for (const card of cards) {
+    afterRects.set(card, card.getBoundingClientRect());
   }
 
-  if (changes.length > 0) {
-    void document.body.offsetHeight;
+  const vh = window.innerHeight;
+  const nearViewport = (r) => r && r.bottom >= -320 && r.top <= vh + 320;
+  const openingSet = new Set(openingCards);
+  const closingSet = new Set(closingCards);
+
+  const anyOpening = openingCards.length > 0;
+  const durationMs = anyOpening ? 280 : 220;
+  const ease = 'cubic-bezier(0.22, 1, 0.36, 1)';
+  const opDurMs = anyOpening ? 200 : 180;
+
+  const anims = [];
+  const tempElevated = [];
+  const tempClosingHosts = [];
+
+  // Attach zero-layout absolute overlays for visible collapsing cards so they smoothly clip shut on GPU
+  for (const card of closingCards) {
+    const b = beforeRects.get(card);
+    const a = afterRects.get(card);
+    const bodyH = prevBodyHeightMap.get(card) || 0;
+    if (bodyH < 2 || (!nearViewport(b) && !nearViewport(a))) continue;
+    const col = card.querySelector('.exercise-collapse');
+    if (!col) continue;
+    card.classList.add('is-collapsing-host');
+    col.classList.add('is-collapsing-overlay');
+    tempClosingHosts.push({ card, col });
+    anims.push(
+      col.animate(
+        [
+          { clipPath: 'inset(0px 0px 0px 0px round 0px 0px 16px 16px)', opacity: 1 },
+          { clipPath: `inset(0px 0px ${bodyH.toFixed(1)}px 0px round 0px 0px 16px 16px)`, opacity: 0 }
+        ],
+        { duration: durationMs, easing: ease }
+      )
+    );
   }
 
-  for (const c of changes) {
-    const seq = c.col._animSeq;
-    c.col.style.setProperty('--ex-anim-dur', `${durationMs}ms`);
-    c.col.style.setProperty('--ex-op-dur', `${opDurMs}ms`);
-    c.col.style.setProperty('--ex-anim-ease', easeCss);
-    c.col.style.transition = '';
-    c.col.style.visibility = '';
-    c.col.style.height = `${c.toH}px`;
-    c.col.style.opacity = c.shouldExpand ? '1' : '0';
+  // 4. INVERT & PLAY via 100% GPU-composited WAAPI (transform + clipPath + opacity)
+  for (const el of topItems) {
+    const b = beforeRects.get(el);
+    const a = afterRects.get(el);
+    if (!b || !a || (!nearViewport(b) && !nearViewport(a))) continue;
 
-    const finalize = () => {
-      if (c.col._animSeq !== seq) return;
-      c.col.classList.remove('is-animating');
-      c.col.style.height = '';
-      c.col.style.opacity = '';
-      c.col.style.visibility = '';
-      c.col.style.transition = '';
-      c.col.style.removeProperty('--ex-anim-dur');
-      c.col.style.removeProperty('--ex-op-dur');
-      c.col.style.removeProperty('--ex-anim-ease');
-      if (!c.shouldExpand) c.col.setAttribute('inert', '');
-    };
+    const dy = b.top - a.top;
+    const isOpeningSingle = openingSet.has(el);
+    const isSuperset = el.classList.contains('superset-group');
+    const isClosingSingle = closingSet.has(el);
 
-    const anims = typeof c.col.getAnimations === 'function' ? c.col.getAnimations() : [];
-    if (anims.length > 0) {
-      Promise.race([
-        Promise.allSettled(anims.map((a) => a.finished)),
-        new Promise((r) => setTimeout(r, 1500))
-      ]).then(finalize);
-    } else {
-      setTimeout(finalize, durationMs + 40);
+    if (!isClosingSingle && tempClosingHosts.length > 0) {
+      el.classList.add('exercise-flip-elevated');
+      tempElevated.push(el);
+    }
+
+    if (isOpeningSingle) {
+      const clipDelta = Math.max(0, a.height - b.height);
+      const fromFrame = { transform: `translate3d(0, ${dy.toFixed(1)}px, 0)` };
+      const toFrame = { transform: 'translate3d(0, 0, 0)' };
+      if (clipDelta >= 2) {
+        fromFrame.clipPath = `inset(0px 0px ${clipDelta.toFixed(1)}px 0px round 16px)`;
+        toFrame.clipPath = 'inset(0px 0px 0px 0px round 16px)';
+      }
+      if (Math.abs(dy) >= 0.5 || clipDelta >= 2) {
+        anims.push(el.animate([fromFrame, toFrame], { duration: durationMs, easing: ease }));
+      }
+      const col = el.querySelector('.exercise-collapse');
+      if (col) {
+        anims.push(col.animate([{ opacity: 0 }, { opacity: 1 }], { duration: opDurMs, easing: ease }));
+      }
+    } else if (isSuperset) {
+      const groupDelta = a.height - b.height;
+      const fromFrame = { transform: `translate3d(0, ${dy.toFixed(1)}px, 0)` };
+      const toFrame = { transform: 'translate3d(0, 0, 0)' };
+      if (groupDelta >= 2) {
+        fromFrame.clipPath = `inset(0px 0px ${groupDelta.toFixed(1)}px 0px round 16px)`;
+        toFrame.clipPath = 'inset(0px 0px 0px 0px round 16px)';
+      }
+      if (Math.abs(dy) >= 0.5 || groupDelta >= 2) {
+        anims.push(el.animate([fromFrame, toFrame], { duration: durationMs, easing: ease }));
+      }
+
+      // Animate inner cards relative to their superset group (zero double-translation!)
+      const groupCards = Array.from(el.querySelectorAll(':scope > .exercise-card[data-ex-card]'));
+      for (const card of groupCards) {
+        const cb = beforeRects.get(card);
+        const ca = afterRects.get(card);
+        if (!cb || !ca) continue;
+        const relDy = (cb.top - b.top) - (ca.top - a.top);
+        const cardIsOpening = openingSet.has(card);
+        const clipDelta = cardIsOpening ? Math.max(0, ca.height - cb.height) : 0;
+
+        if (!closingSet.has(card) && tempClosingHosts.length > 0) {
+          card.classList.add('exercise-flip-elevated');
+          tempElevated.push(card);
+        }
+
+        if (Math.abs(relDy) >= 0.5 || clipDelta >= 2) {
+          const cf = { transform: `translate3d(0, ${relDy.toFixed(1)}px, 0)` };
+          const ct = { transform: 'translate3d(0, 0, 0)' };
+          if (clipDelta >= 2) {
+            cf.clipPath = `inset(0px 0px ${clipDelta.toFixed(1)}px 0px round 16px)`;
+            ct.clipPath = 'inset(0px 0px 0px 0px round 16px)';
+          }
+          anims.push(card.animate([cf, ct], { duration: durationMs, easing: ease }));
+        }
+        if (cardIsOpening) {
+          const col = card.querySelector('.exercise-collapse');
+          if (col) {
+            anims.push(col.animate([{ opacity: 0 }, { opacity: 1 }], { duration: opDurMs, easing: ease }));
+          }
+        }
+      }
+    } else if (Math.abs(dy) >= 0.5) {
+      anims.push(
+        el.animate(
+          [
+            { transform: `translate3d(0, ${dy.toFixed(1)}px, 0)` },
+            { transform: 'translate3d(0, 0, 0)' }
+          ],
+          { duration: durationMs, easing: ease }
+        )
+      );
     }
   }
 
-  if (shouldScroll) {
-    const onUserInterrupt = () => cancelAccordionScroll();
-    window.addEventListener('touchstart', onUserInterrupt, { passive: true, once: true });
-    window.addEventListener('wheel', onUserInterrupt, { passive: true, once: true });
-    activeAccordionCancelListeners = () => {
-      window.removeEventListener('touchstart', onUserInterrupt);
-      window.removeEventListener('wheel', onUserInterrupt);
-    };
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    for (const a of anims) {
+      try { a.cancel(); } catch { /* ignore */ }
+    }
+    for (const { card, col } of tempClosingHosts) {
+      card.classList.remove('is-collapsing-host');
+      col.classList.remove('is-collapsing-overlay');
+    }
+    for (const el of tempElevated) {
+      el.classList.remove('exercise-flip-elevated');
+    }
+    if (activeAccordionCleanup === cleanup) {
+      activeAccordionCleanup = null;
+    }
+  };
 
-    const startTime = performance.now();
-    const tickScroll = (now) => {
-      const elapsed = now - startTime;
-      const rawT = Math.min(1, elapsed / durationMs);
-      const eased = evalCubicBezier(rawT, bezier[0], bezier[1], bezier[2], bezier[3]);
-      const currentTargetDocTop = targetCard.getBoundingClientRect().top + window.scrollY;
-      const desiredScreenY = startScreenY + (endScreenY - startScreenY) * eased;
-      const maxNow = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
-      const nextScrollY = Math.max(0, Math.min(currentTargetDocTop - desiredScreenY, maxNow));
-      window.scrollTo(0, nextScrollY);
-      const stillAnimating = changes.some((c) => c.col.classList.contains('is-animating'));
-      if (rawT < 1 || (stillAnimating && elapsed < durationMs + 120)) {
-        activeAccordionScrollRaf = requestAnimationFrame(tickScroll);
-      } else {
-        cancelAccordionScroll();
-      }
-    };
-    activeAccordionScrollRaf = requestAnimationFrame(tickScroll);
+  if (anims.length === 0) {
+    cleanup();
+    return;
   }
+
+  activeAccordionCleanup = cleanup;
+  Promise.allSettled(anims.map((a) => a.finished)).then(() => {
+    if (activeAccordionCleanup === cleanup) cleanup();
+  });
 }
 
 function renderMain({ overrideExpandedIds = null } = {}) {
-  cancelAccordionScroll();
+  cancelAccordionAnimations();
   applyTheme();
   renderHeader();
   renderRestDock();

@@ -892,12 +892,25 @@ body.has-rest-dock .app-shell {
 }
 
 .exercise-card {
+  position: relative;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   overflow: hidden;
   scroll-margin-top: 84px;
   transition: border-color 200ms ease, background-color 200ms ease;
+}
+
+.exercise-card.is-collapsing-host {
+  overflow: visible;
+  z-index: 1;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.exercise-flip-elevated {
+  position: relative;
+  z-index: 2;
 }
 
 @media (min-width: 720px) {
@@ -988,31 +1001,29 @@ body.has-rest-dock .app-shell {
 }
 
 .exercise-collapse {
-  overflow: hidden;
-  interpolate-size: allow-keywords;
   contain: layout;
 }
 
 .exercise-card.is-collapsed .exercise-collapse {
-  height: 0;
-  opacity: 0;
-  visibility: hidden;
+  display: none;
 }
 
 .exercise-card.is-expanded .exercise-collapse {
-  height: auto;
-  opacity: 1;
-  visibility: visible;
+  display: block;
 }
 
-.exercise-collapse.is-animating {
-  overflow: hidden !important;
-  will-change: height, opacity;
-  transition:
-    height var(--ex-anim-dur, 280ms) var(--ex-anim-ease, cubic-bezier(0.22, 1, 0.36, 1)),
-    opacity var(--ex-op-dur, 220ms) var(--ex-anim-ease, cubic-bezier(0.22, 1, 0.36, 1)),
-    visibility var(--ex-anim-dur, 280ms);
-  transition-behavior: allow-discrete;
+.exercise-card.is-collapsed .exercise-collapse.is-collapsing-overlay {
+  display: block;
+  position: absolute;
+  top: 100%;
+  left: -1px;
+  right: -1px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-top: 0;
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  overflow: hidden;
+  pointer-events: none;
 }
 
 .exercise-collapse-inner {
@@ -1862,8 +1873,6 @@ input[type="number"] {
 
   .exercise-card,
   .exercise-toggle,
-  .exercise-collapse,
-  .exercise-collapse.is-animating,
   .exercise-chevron {
     transition: none !important;
   }
