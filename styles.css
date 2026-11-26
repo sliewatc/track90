@@ -882,50 +882,154 @@ body.has-rest-dock .app-shell {
   transition: transform 260ms cubic-bezier(0.16, 1, 0.3, 1), background-color 200ms ease;
 }
 
-/* Mid-Workout Cards & Flat Hairline Logger Section */
+/* Mid-Workout Exercise Accordion Cards & Flat Hairline Logger Section */
+.exercise-list-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 2px 0;
+}
+
 .exercise-card {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  transition: border-color 180ms ease;
+  overflow: hidden;
+  scroll-margin-top: 84px;
+  transition: border-color 200ms ease, background-color 200ms ease;
+}
+
+@media (min-width: 720px) {
+  .exercise-card {
+    scroll-margin-top: 128px;
+  }
+}
+
+.exercise-card.is-collapsed {
+  background: var(--surface-2);
 }
 
 .exercise-card.is-active {
   border-color: var(--primary);
 }
 
-.exercise-compact {
+.exercise-card.is-done.is-collapsed {
+  border-color: color-mix(in srgb, var(--primary) 40%, transparent);
+  background: color-mix(in srgb, var(--primary-soft) 30%, var(--surface));
+}
+
+.exercise-toggle {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
   width: 100%;
   text-align: left;
-  font: inherit;
-  color: var(--text);
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 12px 16px;
+  padding: 14px 16px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   cursor: pointer;
-  transition: border-color 140ms ease, background-color 140ms ease, transform 100ms ease;
+  touch-action: manipulation;
+  transition: background-color 140ms ease;
 }
 
-.exercise-compact:active {
-  transform: scale(0.99);
+.exercise-toggle:hover {
+  background: color-mix(in srgb, var(--surface-3) 42%, transparent);
 }
 
-.exercise-compact:hover {
-  background: var(--surface-2);
+.exercise-toggle:active {
+  background: color-mix(in srgb, var(--surface-3) 72%, transparent);
 }
 
-.exercise-compact.is-done {
-  border-color: color-mix(in srgb, var(--primary) 40%, transparent);
-  background: color-mix(in srgb, var(--primary-soft) 30%, var(--surface));
+.exercise-head-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.exercise-title-row {
+  font-weight: 700;
+  font-size: 0.96875rem;
+  line-height: 1.3;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.exercise-sub {
+  margin-top: 3px;
+}
+
+.exercise-head-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.exercise-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1), color 160ms ease;
+}
+
+.exercise-card.is-expanded .exercise-chevron {
+  transform: rotate(180deg);
+  color: var(--text);
+}
+
+.exercise-collapse {
+  overflow: hidden;
+  interpolate-size: allow-keywords;
+  contain: layout;
+}
+
+.exercise-card.is-collapsed .exercise-collapse {
+  height: 0;
+  opacity: 0;
+  visibility: hidden;
+}
+
+.exercise-card.is-expanded .exercise-collapse {
+  height: auto;
+  opacity: 1;
+  visibility: visible;
+}
+
+.exercise-collapse.is-animating {
+  overflow: hidden !important;
+  will-change: height, opacity;
+  transition:
+    height var(--ex-anim-dur, 280ms) var(--ex-anim-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    opacity var(--ex-op-dur, 220ms) var(--ex-anim-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+    visibility var(--ex-anim-dur, 280ms);
+  transition-behavior: allow-discrete;
+}
+
+.exercise-collapse-inner {
+  padding: 0 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.exercise-actions-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 12px;
 }
 
 .superset-group {
@@ -949,15 +1053,6 @@ body.has-rest-dock .app-shell {
   background: var(--surface-2);
   border-radius: var(--radius-sm);
   padding: 8px 12px;
-}
-
-.queue-divider {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border-subtle);
 }
 
 .queue-heading {
@@ -1759,12 +1854,18 @@ input[type="number"] {
   .theme-option,
   .check-row,
   .check-box,
-  .exercise-card,
-  .exercise-compact,
   .bar-fill,
   [data-theme="pastel"] .tap-chip,
   [data-theme="pastel"] .btn {
     transition-duration: 80ms;
+  }
+
+  .exercise-card,
+  .exercise-toggle,
+  .exercise-collapse,
+  .exercise-collapse.is-animating,
+  .exercise-chevron {
+    transition: none !important;
   }
 
   .modal-backdrop,
@@ -1802,7 +1903,6 @@ input[type="number"] {
   .btn:active,
   .tap-chip:active,
   .check-row:active,
-  .exercise-compact:active,
   .theme-option:active {
     transform: none;
   }

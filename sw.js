@@ -1,4 +1,4 @@
-const CACHE_NAME = 'recomp-90d-v16';
+const CACHE_NAME = 'recomp-90d-v17';
 const ASSETS = [
   './',
   './index.html',

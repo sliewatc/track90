@@ -43,6 +43,7 @@ const ICONS = {
   flame: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>',
   bolt: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
   chevronRight: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>',
+  chevronDown: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>',
   close: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
   arrowRight: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>',
   sliders: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>',
@@ -321,6 +322,7 @@ function ensureWorkoutDraft(workoutId) {
       conditioningDone: false,
       conditioningSwapped: false,
       activeExId: workout.exercises[0]?.id || null,
+      collapsedExIds: {},
       activeSetIdxByEx: {},
       extraSetsByEx: {},
       sets: {}
@@ -329,6 +331,7 @@ function ensureWorkoutDraft(workoutId) {
   const draft = state.draftWorkouts[workoutId];
   if (!draft.rampDone) draft.rampDone = {};
   if (!draft.rampOpen) draft.rampOpen = {};
+  if (!draft.collapsedExIds) draft.collapsedExIds = {};
   if (!draft.activeSetIdxByEx) draft.activeSetIdxByEx = {};
   if (!draft.extraSetsByEx) draft.extraSetsByEx = {};
 
@@ -1453,7 +1456,26 @@ function renderTodayView() {
   `;
 }
 
-function renderTrainView() {
+function getExpandedExerciseIds(workout, draft) {
+  const set = new Set();
+  if (!workout || !draft) return set;
+  if (!state.trainFocusMode) {
+    const collapsed = draft.collapsedExIds || {};
+    for (const ex of workout.exercises) {
+      if (!collapsed[ex.id]) set.add(ex.id);
+    }
+    return set;
+  }
+  const activeEx = draft.activeExId ? workout.exercises.find((e) => e.id === draft.activeExId) : null;
+  const activeSupersetGroup = activeEx?.superset ? activeEx.superset[0] : null;
+  for (const ex of workout.exercises) {
+    if (ex.id === draft.activeExId) set.add(ex.id);
+    else if (activeSupersetGroup && ex.superset && ex.superset.startsWith(activeSupersetGroup)) set.add(ex.id);
+  }
+  return set;
+}
+
+function renderTrainView({ overrideExpandedIds = null } = {}) {
   const workoutsMap = getWorkouts();
   const workoutId = state.activeWorkoutId;
   const workout = workoutsMap[workoutId];
@@ -1465,22 +1487,19 @@ function renderTrainView() {
 
   let totalSets = 0;
   let doneSets = 0;
+  let completedExCount = 0;
   for (const ex of workout.exercises) {
     const s = draft.sets[ex.id] || [];
     totalSets += s.length;
-    doneSets += s.filter((x) => x.done).length;
+    const exDone = s.filter((x) => x.done).length;
+    doneSets += exDone;
+    if (s.length > 0 && exDone === s.length) completedExCount++;
   }
   const progressRatio = totalSets > 0 ? doneSets / totalSets : 0;
   const allWorkingSetsDone = totalSets > 0 && doneSets === totalSets;
 
-  const activeEx = draft.activeExId ? workout.exercises.find((e) => e.id === draft.activeExId) : null;
-  const activeSupersetGroup = activeEx?.superset ? activeEx.superset[0] : null;
-  const isExpanded = (ex) => {
-    if (!state.trainFocusMode) return true;
-    if (ex.id === draft.activeExId) return true;
-    if (activeSupersetGroup && ex.superset && ex.superset.startsWith(activeSupersetGroup)) return true;
-    return false;
-  };
+  const expandedIds = overrideExpandedIds || getExpandedExerciseIds(workout, draft);
+  const isExpanded = (ex) => expandedIds.has(ex.id);
 
   const blocks = [];
   for (let i = 0; i < workout.exercises.length; i++) {
@@ -1509,28 +1528,13 @@ function renderTrainView() {
     const exDoneCount = setRows.filter((s) => s.done).length;
     const allExDone = exDoneCount === setRows.length && setRows.length > 0;
     const progression = phase !== 'deload' ? evaluateDoubleProgression(setRows, ex, activeName) : null;
-
-    if (!isExpanded(ex)) {
-      const doneSummary = setRows.filter((s) => s.done).map((s) => `${s.weight || 'BW'}×${s.reps}`).join(', ');
-      return `
-        <button type="button" class="exercise-compact ${allExDone ? 'is-done' : ''}" data-action="focus-exercise" data-ex="${ex.id}">
-          <div>
-            <div style="font-weight:700;font-size:0.9375rem;">
-              ${ex.superset ? `<span class="tag tag-warn" style="margin-right:6px;">${ex.superset}</span>` : ''}
-              ${escapeHtml(activeName)}
-            </div>
-            <div class="muted-sm">
-              ${allExDone
-                ? `Completed (${doneSummary})${progression ? ` · +${progression.increment} lb ready` : ''}`
-                : `${exDoneCount}/${setRows.length} sets · ${ex.repMin === ex.repMax ? ex.repMin : `${ex.repMin}–${ex.repMax}`} reps · Rest ${ex.restLabel}`}
-            </div>
-          </div>
-          <div class="row-wrap">
-            ${allExDone ? `<span class="tag tag-accent">${icon('check')} Completed</span>` : `<span class="tag">Open ${icon('chevronRight')}</span>`}
-          </div>
-        </button>
-      `;
-    }
+    const expanded = isExpanded(ex);
+    const doneSummary = allExDone
+      ? setRows.filter((s) => s.done).map((s) => `${s.weight || 'BW'}×${s.reps}`).join(', ')
+      : '';
+    const headerSubText = allExDone
+      ? `Completed (${doneSummary})${progression ? ` · +${progression.increment} lb ready` : ''}`
+      : `${exDoneCount}/${setRows.length} sets · ${ex.repMin === ex.repMax ? ex.repMin : `${ex.repMin}–${ex.repMax}`} reps · Rest ${ex.restLabel}`;
 
     const selIdx = Math.min(setRows.length - 1, Math.max(0, draft.activeSetIdxByEx[ex.id] ?? 0));
     const selSet = setRows[selIdx] || { weight: '', reps: String(ex.repMin), rir: '1.5', done: false };
@@ -1567,29 +1571,37 @@ function renderTrainView() {
     const priorSwap = !isSwapped ? getPriorSwapContext(state.workoutHistory, workoutId, ex.id, ex.name) : null;
 
     return `
-      <div class="exercise-card ${isActiveFocus ? 'is-active' : ''}">
-        <div class="row-between" style="align-items:flex-start;">
-          <div>
-            <div style="font-weight:700;font-size:1.05rem;">
-              ${ex.superset ? `<span class="tag tag-warn" style="margin-right:6px;">${ex.superset}</span>` : ''}
-              ${escapeHtml(activeName)}
+      <article class="exercise-card ${expanded ? 'is-expanded' : 'is-collapsed'} ${isActiveFocus ? 'is-active' : ''} ${allExDone ? 'is-done' : ''}" data-ex-card="${ex.id}">
+        <button type="button" class="exercise-toggle" data-action="focus-exercise" data-ex="${ex.id}" aria-expanded="${expanded}" aria-controls="ex-body-${ex.id}">
+          <div class="exercise-head-main">
+            <div class="exercise-title-row">
+              ${ex.superset ? `<span class="tag tag-warn">${ex.superset}</span>` : ''}
+              <span>${escapeHtml(activeName)}</span>
             </div>
-            <div class="muted-sm" style="margin-top:4px;">
-              ${setRows.length} × ${ex.repMin === ex.repMax ? ex.repMin : `${ex.repMin}–${ex.repMax}`} reps · Rest ${ex.restLabel} · ${workout.rirDefault} RIR
-            </div>
+            <div class="muted-sm exercise-sub">${escapeHtml(headerSubText)}</div>
           </div>
-          <div class="row-wrap" style="justify-content:flex-end;">
-            ${ex.rampUp ? `<button type="button" class="btn btn-sm" data-action="toggle-ramp-inline" data-ex="${ex.id}">${rampOpen ? 'Hide Ramp' : 'Ramp-Up'}</button>` : ''}
-            <button type="button" class="btn btn-sm" data-action="open-swap" data-ex="${ex.id}">${icon('swap')} <span>${isSwapped ? 'Swapped' : 'Swap'}</span></button>
+          <div class="exercise-head-status">
+            ${allExDone
+              ? `<span class="tag tag-accent">${icon('check')} Done</span>`
+              : `<span class="tag tabular">${exDoneCount}/${setRows.length}</span>`}
+            <span class="exercise-chevron" aria-hidden="true">${icon('chevronDown')}</span>
           </div>
-        </div>
+        </button>
 
-        <div class="row-wrap">
-          ${ex.leftFirst ? '<span class="tag tag-accent">Left Arm First → Match R</span>' : ''}
-          <span class="tag">${effectiveBarbell ? `Barbell (+${weightStep} lb)` : ex.isCompound ? `Compound (+${weightStep} lb)` : `Isolation (+${weightStep} lb)`}</span>
-          ${spec.phaseNote ? `<span class="tag tag-accent">${escapeHtml(spec.phaseNote)}</span>` : ''}
-          ${spec.activeIntensifier ? `<span class="tag tag-warn">${icon('bolt')} ${escapeHtml(spec.activeIntensifier)}</span>` : ''}
-        </div>
+        <div class="exercise-collapse" id="ex-body-${ex.id}" ${expanded ? '' : 'inert'}>
+          <div class="exercise-collapse-inner">
+            <div class="exercise-actions-row">
+              <div class="row-wrap">
+                ${ex.leftFirst ? '<span class="tag tag-accent">Left Arm First → Match R</span>' : ''}
+                <span class="tag">${effectiveBarbell ? `Barbell (+${weightStep} lb)` : ex.isCompound ? `Compound (+${weightStep} lb)` : `Isolation (+${weightStep} lb)`}</span>
+                ${spec.phaseNote ? `<span class="tag tag-accent">${escapeHtml(spec.phaseNote)}</span>` : ''}
+                ${spec.activeIntensifier ? `<span class="tag tag-warn">${icon('bolt')} ${escapeHtml(spec.activeIntensifier)}</span>` : ''}
+              </div>
+              <div class="row-wrap" style="justify-content:flex-end;">
+                ${ex.rampUp ? `<button type="button" class="btn btn-sm" data-action="toggle-ramp-inline" data-ex="${ex.id}">${rampOpen ? 'Hide Ramp' : 'Ramp-Up'}</button>` : ''}
+                <button type="button" class="btn btn-sm" data-action="open-swap" data-ex="${ex.id}">${icon('swap')} <span>${isSwapped ? 'Swapped' : 'Swap'}</span></button>
+              </div>
+            </div>
 
         <!-- Live Mid-Set Target HUD -->
         <div class="kpi-strip kpi-strip-2">
@@ -1747,7 +1759,9 @@ function renderTrainView() {
             <button type="button" class="btn" aria-label="Start rest timer manually" data-action="start-rest" data-sec="${ex.restSec}" data-label="${escapeHtml(activeName)}">${icon('timer')}</button>
           </div>
         </div>
-      </div>
+          </div>
+        </div>
+      </article>
     `;
   };
 
@@ -1777,13 +1791,7 @@ function renderTrainView() {
     `
     : renderExerciseCard(b.items[0]);
 
-  const queueSplitIdx = state.trainFocusMode ? orderedBlocks.findIndex((b) => !b.items.some(isExpanded)) : -1;
-  const activeBlocksHtml = queueSplitIdx >= 0
-    ? orderedBlocks.slice(0, queueSplitIdx).map(renderBlock).join('')
-    : orderedBlocks.map(renderBlock).join('');
-  const restBlocksHtml = queueSplitIdx >= 0
-    ? orderedBlocks.slice(queueSplitIdx).map(renderBlock).join('')
-    : '';
+  const allBlocksHtml = orderedBlocks.map(renderBlock).join('');
 
   return `
     ${lastSavedBanner ? `
@@ -1882,22 +1890,12 @@ function renderTrainView() {
       </section>
     ` : ''}
 
-    ${!state.trainFocusMode ? `
-      <div class="row-between">
-        <span class="muted-sm">Showing all exercises</span>
-        <button type="button" class="btn btn-sm btn-ghost" data-action="toggle-focus-mode">Focus active</button>
-      </div>
-    ` : ''}
+    <div class="exercise-list-bar">
+      <span class="queue-heading">Exercises (${completedExCount}/${workout.exercises.length})</span>
+      <button type="button" class="btn btn-sm btn-ghost" data-action="toggle-focus-mode" id="focus-mode-btn">${state.trainFocusMode ? 'Show all' : 'Focus active'}</button>
+    </div>
 
-    ${activeBlocksHtml}
-
-    ${restBlocksHtml ? `
-      <div class="queue-divider">
-        <span class="queue-heading">Up Next &amp; Completed</span>
-        <button type="button" class="btn btn-sm btn-ghost" data-action="toggle-focus-mode">Show all</button>
-      </div>
-      ${restBlocksHtml}
-    ` : ''}
+    ${allBlocksHtml}
 
     ${workout.conditioning ? `
       <section class="card">
@@ -2591,14 +2589,246 @@ function renderPlanView() {
   `;
 }
 
-function renderMain() {
+let activeAccordionScrollRaf = null;
+let activeAccordionCancelListeners = null;
+
+function cancelAccordionScroll() {
+  if (activeAccordionScrollRaf !== null) {
+    cancelAnimationFrame(activeAccordionScrollRaf);
+    activeAccordionScrollRaf = null;
+  }
+  if (activeAccordionCancelListeners) {
+    activeAccordionCancelListeners();
+    activeAccordionCancelListeners = null;
+  }
+}
+
+function evalCubicBezier(t, x1, y1, x2, y2) {
+  if (t <= 0) return 0;
+  if (t >= 1) return 1;
+  const ax = 3 * x1 - 3 * x2 + 1;
+  const bx = 3 * x2 - 6 * x1;
+  const cx = 3 * x1;
+  const ay = 3 * y1 - 3 * y2 + 1;
+  const by = 3 * y2 - 6 * y1;
+  const cy = 3 * y1;
+  let lo = 0;
+  let hi = 1;
+  let u = t;
+  for (let i = 0; i < 14; i++) {
+    const x = ((ax * u + bx) * u + cx) * u;
+    if (Math.abs(x - t) < 1e-5) break;
+    if (x < t) lo = u;
+    else hi = u;
+    u = 0.5 * (lo + hi);
+  }
+  return ((ay * u + by) * u + cy) * u;
+}
+
+function syncExerciseAccordionInPlace(workout, draft, { targetExId = null, scrollToTarget = false } = {}) {
+  cancelAccordionScroll();
+  const cards = Array.from(document.querySelectorAll('.exercise-card[data-ex-card]'));
+  if (cards.length === 0) {
+    renderMain();
+    return;
+  }
+
+  const focusBtn = document.getElementById('focus-mode-btn');
+  if (focusBtn) {
+    focusBtn.textContent = state.trainFocusMode ? 'Show all' : 'Focus active';
+  }
+
+  const nextExpandedSet = getExpandedExerciseIds(workout, draft);
+  const targetCard = targetExId
+    ? cards.find((c) => c.dataset.exCard === targetExId) || null
+    : null;
+
+  const startScrollY = window.scrollY;
+  const headerEl = document.querySelector('.top-header');
+  const stickyOffset = Math.ceil((headerEl ? headerEl.offsetHeight : 0) + 12);
+  const startTargetDocTop = targetCard ? (targetCard.getBoundingClientRect().top + startScrollY) : 0;
+  const startScreenY = startTargetDocTop - startScrollY;
+
+  const changes = [];
+  for (const card of cards) {
+    const exId = card.dataset.exCard;
+    const col = card.querySelector('.exercise-collapse');
+    const inner = card.querySelector('.exercise-collapse-inner');
+    const toggleBtn = card.querySelector('.exercise-toggle');
+    if (!col || !inner) continue;
+
+    const shouldExpand = nextExpandedSet.has(exId);
+    const wasExpanded = card.classList.contains('is-expanded');
+    const isAnimating = col.classList.contains('is-animating');
+
+    card.classList.toggle('is-active', exId === draft.activeExId);
+    if (toggleBtn) toggleBtn.setAttribute('aria-expanded', String(shouldExpand));
+
+    if (shouldExpand !== wasExpanded || isAnimating) {
+      const fromH = col.getBoundingClientRect().height;
+      const fromOp = parseFloat(getComputedStyle(col).opacity);
+      let toH = 0;
+      if (shouldExpand) {
+        const hadInert = col.hasAttribute('inert');
+        col.removeAttribute('inert');
+        col.style.transition = 'none';
+        col.style.visibility = 'visible';
+        col.style.height = 'auto';
+        toH = inner.getBoundingClientRect().height;
+        col.style.height = `${fromH}px`;
+        col.style.visibility = '';
+        if (hadInert) col.setAttribute('inert', '');
+      }
+      changes.push({
+        card,
+        col,
+        exId,
+        shouldExpand,
+        fromH,
+        toH,
+        fromOp: Number.isFinite(fromOp) ? fromOp : (fromH > 0 ? 1 : 0)
+      });
+    }
+  }
+
+  let deltaAbove = 0;
+  let deltaTotal = 0;
+  for (const c of changes) {
+    const diff = c.toH - c.fromH;
+    deltaTotal += diff;
+    if (targetCard && c.card !== targetCard && (c.card.compareDocumentPosition(targetCard) & Node.DOCUMENT_POSITION_FOLLOWING)) {
+      deltaAbove += diff;
+    }
+  }
+
+  const finalTargetDocTop = startTargetDocTop + deltaAbove;
+  const finalDocHeight = document.documentElement.scrollHeight + deltaTotal;
+  const finalMaxScrollY = Math.max(0, finalDocHeight - window.innerHeight);
+  const desiredScrollY = finalTargetDocTop - stickyOffset;
+  const endScrollY = Math.max(0, Math.min(desiredScrollY, finalMaxScrollY));
+  const endScreenY = finalTargetDocTop - endScrollY;
+  const shouldScroll = Boolean(
+    scrollToTarget &&
+    targetCard &&
+    (Math.abs(endScrollY - startScrollY) >= 4 || Math.abs(deltaAbove) >= 4)
+  );
+
+  if (prefersReducedMotion()) {
+    for (const c of changes) {
+      c.col._animSeq = (c.col._animSeq || 0) + 1;
+      c.col.classList.remove('is-animating');
+      c.col.style.height = '';
+      c.col.style.opacity = '';
+      c.col.style.transition = '';
+      c.col.style.removeProperty('--ex-anim-dur');
+      c.col.style.removeProperty('--ex-op-dur');
+      c.col.style.removeProperty('--ex-anim-ease');
+      c.card.classList.toggle('is-expanded', c.shouldExpand);
+      c.card.classList.toggle('is-collapsed', !c.shouldExpand);
+      if (c.shouldExpand) c.col.removeAttribute('inert');
+      else c.col.setAttribute('inert', '');
+    }
+    if (shouldScroll) {
+      window.scrollTo({ top: endScrollY, behavior: 'auto' });
+    }
+    return;
+  }
+
+  const anyOpening = changes.some((c) => c.shouldExpand);
+  const durationMs = anyOpening ? 280 : 200;
+  const opDurMs = anyOpening ? 220 : 190;
+  const easeCss = anyOpening ? 'cubic-bezier(0.22, 1, 0.36, 1)' : 'cubic-bezier(0.4, 0, 1, 1)';
+  const bezier = anyOpening ? [0.22, 1, 0.36, 1] : [0.4, 0, 1, 1];
+
+  for (const c of changes) {
+    c.col._animSeq = (c.col._animSeq || 0) + 1;
+    c.col.style.transition = 'none';
+    c.col.style.height = `${c.fromH}px`;
+    c.col.style.opacity = String(c.fromOp);
+    c.col.style.visibility = 'visible';
+    c.col.classList.add('is-animating');
+    if (c.shouldExpand) c.col.removeAttribute('inert');
+    c.card.classList.toggle('is-expanded', c.shouldExpand);
+    c.card.classList.toggle('is-collapsed', !c.shouldExpand);
+  }
+
+  if (changes.length > 0) {
+    void document.body.offsetHeight;
+  }
+
+  for (const c of changes) {
+    const seq = c.col._animSeq;
+    c.col.style.setProperty('--ex-anim-dur', `${durationMs}ms`);
+    c.col.style.setProperty('--ex-op-dur', `${opDurMs}ms`);
+    c.col.style.setProperty('--ex-anim-ease', easeCss);
+    c.col.style.transition = '';
+    c.col.style.visibility = '';
+    c.col.style.height = `${c.toH}px`;
+    c.col.style.opacity = c.shouldExpand ? '1' : '0';
+
+    const finalize = () => {
+      if (c.col._animSeq !== seq) return;
+      c.col.classList.remove('is-animating');
+      c.col.style.height = '';
+      c.col.style.opacity = '';
+      c.col.style.visibility = '';
+      c.col.style.transition = '';
+      c.col.style.removeProperty('--ex-anim-dur');
+      c.col.style.removeProperty('--ex-op-dur');
+      c.col.style.removeProperty('--ex-anim-ease');
+      if (!c.shouldExpand) c.col.setAttribute('inert', '');
+    };
+
+    const anims = typeof c.col.getAnimations === 'function' ? c.col.getAnimations() : [];
+    if (anims.length > 0) {
+      Promise.race([
+        Promise.allSettled(anims.map((a) => a.finished)),
+        new Promise((r) => setTimeout(r, 1500))
+      ]).then(finalize);
+    } else {
+      setTimeout(finalize, durationMs + 40);
+    }
+  }
+
+  if (shouldScroll) {
+    const onUserInterrupt = () => cancelAccordionScroll();
+    window.addEventListener('touchstart', onUserInterrupt, { passive: true, once: true });
+    window.addEventListener('wheel', onUserInterrupt, { passive: true, once: true });
+    activeAccordionCancelListeners = () => {
+      window.removeEventListener('touchstart', onUserInterrupt);
+      window.removeEventListener('wheel', onUserInterrupt);
+    };
+
+    const startTime = performance.now();
+    const tickScroll = (now) => {
+      const elapsed = now - startTime;
+      const rawT = Math.min(1, elapsed / durationMs);
+      const eased = evalCubicBezier(rawT, bezier[0], bezier[1], bezier[2], bezier[3]);
+      const currentTargetDocTop = targetCard.getBoundingClientRect().top + window.scrollY;
+      const desiredScreenY = startScreenY + (endScreenY - startScreenY) * eased;
+      const maxNow = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+      const nextScrollY = Math.max(0, Math.min(currentTargetDocTop - desiredScreenY, maxNow));
+      window.scrollTo(0, nextScrollY);
+      const stillAnimating = changes.some((c) => c.col.classList.contains('is-animating'));
+      if (rawT < 1 || (stillAnimating && elapsed < durationMs + 120)) {
+        activeAccordionScrollRaf = requestAnimationFrame(tickScroll);
+      } else {
+        cancelAccordionScroll();
+      }
+    };
+    activeAccordionScrollRaf = requestAnimationFrame(tickScroll);
+  }
+}
+
+function renderMain({ overrideExpandedIds = null } = {}) {
+  cancelAccordionScroll();
   applyTheme();
   renderHeader();
   renderRestDock();
   syncWakeLock();
   const main = document.getElementById('main-view');
   if (state.activeTab === 'today') main.innerHTML = renderTodayView();
-  else if (state.activeTab === 'train') main.innerHTML = renderTrainView();
+  else if (state.activeTab === 'train') main.innerHTML = renderTrainView({ overrideExpandedIds });
   else if (state.activeTab === 'progress') main.innerHTML = renderProgressView();
   else main.innerHTML = renderPlanView();
   justCheckedTarget = null;
@@ -2753,9 +2983,20 @@ document.addEventListener('click', (e) => {
   } else if (action === 'open-workout-settings') {
     openWorkoutSettingsModal();
   } else if (action === 'toggle-focus-mode') {
+    const workout = getWorkouts()[state.activeWorkoutId];
+    const draft = ensureWorkoutDraft(state.activeWorkoutId);
     state.trainFocusMode = !state.trainFocusMode;
+    if (!state.trainFocusMode) {
+      draft.collapsedExIds = {};
+    } else if (!draft.activeExId && workout?.exercises?.length) {
+      const firstPending = workout.exercises.find((e) => (draft.sets[e.id] || []).some((s) => !s.done));
+      draft.activeExId = firstPending?.id || workout.exercises[0].id;
+    }
     saveState();
-    renderMainWithTransition();
+    syncExerciseAccordionInPlace(workout, draft, {
+      targetExId: draft.activeExId,
+      scrollToTarget: state.trainFocusMode && Boolean(draft.activeExId)
+    });
   } else if (action === 'test-chime') {
     unlockAudio();
     playTimerDoneFeedback({ forceChime: true, volume: 1.0 });
@@ -2777,10 +3018,33 @@ document.addEventListener('click', (e) => {
     }
     renderMain();
   } else if (action === 'focus-exercise') {
+    const workout = getWorkouts()[state.activeWorkoutId];
     const draft = ensureWorkoutDraft(state.activeWorkoutId);
-    draft.activeExId = target.dataset.ex;
+    const exId = target.dataset.ex;
+    if (!draft.collapsedExIds) draft.collapsedExIds = {};
+    let scrollToTarget = false;
+    let targetExId = exId;
+    if (!state.trainFocusMode) {
+      const isCurrentlyCollapsed = Boolean(draft.collapsedExIds[exId]);
+      if (isCurrentlyCollapsed) {
+        delete draft.collapsedExIds[exId];
+        draft.activeExId = exId;
+        scrollToTarget = true;
+      } else {
+        draft.collapsedExIds[exId] = true;
+        if (draft.activeExId === exId) draft.activeExId = null;
+        scrollToTarget = false;
+      }
+    } else if (draft.activeExId === exId) {
+      draft.activeExId = null;
+      targetExId = null;
+      scrollToTarget = false;
+    } else {
+      draft.activeExId = exId;
+      scrollToTarget = true;
+    }
     saveState();
-    renderMainWithTransition();
+    syncExerciseAccordionInPlace(workout, draft, { targetExId, scrollToTarget });
   } else if (action === 'toggle-ramp-inline') {
     const draft = ensureWorkoutDraft(state.activeWorkoutId);
     const exId = target.dataset.ex;
@@ -3112,6 +3376,8 @@ document.addEventListener('click', (e) => {
     const prog = ex && phase !== 'deload' ? evaluateDoubleProgression(setsArr, ex, activeName) : null;
 
     const prevActiveExId = draft.activeExId;
+    const prevExpandedIds = getExpandedExerciseIds(workout, draft);
+    const prevScrollY = window.scrollY;
     const { supersetMovedToPartner, partnerDisplayName } = advanceFocusAfterSetLogged(workoutId, exId, idx);
     const switchedExercise = draft.activeExId !== prevActiveExId;
     saveState();
@@ -3137,13 +3403,11 @@ document.addEventListener('click', (e) => {
     }
     if (msgs.length > 0) showToast(msgs.join(' · '));
     if (switchedExercise) {
-      renderMainWithTransition({
-        onSettled: () => {
-          document.querySelector('.exercise-card.is-active')?.scrollIntoView({
-            behavior: prefersReducedMotion() ? 'auto' : 'smooth',
-            block: 'nearest'
-          });
-        }
+      renderMain({ overrideExpandedIds: prevExpandedIds });
+      window.scrollTo(0, prevScrollY);
+      syncExerciseAccordionInPlace(workout, draft, {
+        targetExId: draft.activeExId,
+        scrollToTarget: Boolean(draft.activeExId)
       });
     } else {
       renderMain();
