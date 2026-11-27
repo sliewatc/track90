@@ -1438,58 +1438,20 @@ body.has-rest-dock .app-shell {
   border-radius: var(--radius-md);
   padding: 8px;
   display: grid;
-  grid-template-columns: 64px minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: stretch;
-  gap: 6px;
+  gap: 8px;
 }
 
 .rack-scoreboard.is-stamped {
   animation: rackStampPop 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.rack-set-col {
-  background: var(--primary);
-  color: var(--primary-fg);
-  border-radius: 10px;
-  padding: 8px 4px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  gap: 2px;
-}
-
-.rack-set-col.is-done {
-  background: var(--success);
-  color: var(--success-fg);
-}
-
-.rack-set-kicker {
-  font-size: 0.625rem;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  opacity: 0.8;
-}
-
-.rack-set-num {
-  font-size: 2.125rem;
-}
-
-.rack-set-of {
-  font-size: 0.625rem;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  opacity: 0.82;
-}
-
 .rack-metric-col {
   background: var(--surface);
   border: 1px solid var(--border-subtle);
   border-radius: 10px;
-  padding: 7px 6px 6px;
+  padding: 8px 8px 7px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1513,12 +1475,12 @@ body.has-rest-dock .app-shell {
   border: 0;
   background: transparent;
   color: var(--text);
-  font-size: 2.5rem;
+  font-size: 2.75rem;
   text-align: center;
   padding: 0;
   margin: 0;
-  min-height: 40px;
-  line-height: 0.96;
+  min-height: 44px;
+  line-height: 0.94;
   -moz-appearance: textfield;
 }
 
@@ -1535,8 +1497,8 @@ body.has-rest-dock .app-shell {
 }
 
 .rack-rep-value {
-  font-size: 2.5rem;
-  min-height: 40px;
+  font-size: 2.75rem;
+  min-height: 44px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1583,16 +1545,16 @@ body.has-rest-dock .app-shell {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.375rem;
+  font-size: 1.5rem;
   font-weight: 800;
   color: var(--text-dim);
-  padding: 0 1px;
+  padding: 0 2px;
 }
 
-/* Weight Vernier Caliper Row */
+/* Weight Numbered Vernier Ruler Row (Natural iOS Tape-Scroll Physics) */
 .caliper-row {
   display: grid;
-  grid-template-columns: 50px minmax(0, 1fr) 50px;
+  grid-template-columns: 48px minmax(0, 1fr) 48px;
   gap: 6px;
   align-items: stretch;
 }
@@ -1609,9 +1571,9 @@ body.has-rest-dock .app-shell {
   min-height: 48px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
-  background: var(--surface-2);
-  color: var(--text-dim);
-  cursor: ew-resize;
+  background: var(--bg);
+  color: var(--text-muted);
+  cursor: grab;
   overflow: hidden;
   display: flex;
   align-items: center;
@@ -1623,63 +1585,178 @@ body.has-rest-dock .app-shell {
 }
 
 .caliper-track.is-dragging {
+  cursor: grabbing;
   border-color: var(--primary);
 }
 
-.caliper-ticks-inner {
-  position: absolute;
-  inset: 0 -48px;
+.caliper-tape {
   display: flex;
   align-items: flex-end;
-  justify-content: space-between;
-  padding: 0 10px 5px;
+  justify-content: center;
+  height: 100%;
+  width: 100%;
   pointer-events: none;
   will-change: transform;
+  -webkit-mask-image: linear-gradient(90deg, transparent 0%, #000 16%, #000 84%, transparent 100%);
+  mask-image: linear-gradient(90deg, transparent 0%, #000 16%, #000 84%, transparent 100%);
 }
 
-.caliper-tick {
-  width: 2px;
-  border-radius: 2px;
-  background: currentColor;
-  opacity: 0.42;
-}
-
-.caliper-tick.is-major {
-  height: 20px;
-  opacity: 0.78;
-}
-
-.caliper-tick.is-minor {
-  height: 11px;
-}
-
-.caliper-needle {
-  position: absolute;
-  top: 4px;
-  bottom: 4px;
-  left: 50%;
-  width: 3px;
-  margin-left: -1.5px;
-  border-radius: 2px;
-  background: var(--primary);
-  pointer-events: none;
-}
-
-.caliper-badge {
+.caliper-slot {
+  flex: 0 0 36px;
+  width: 36px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0 4px;
   position: relative;
-  z-index: 1;
-  font-size: 0.75rem;
+}
+
+.caliper-slot::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  bottom: 5px;
+  width: 1px;
+  height: 6px;
+  border-radius: 1px;
+  background: var(--text-dim);
+  opacity: 0.45;
+}
+
+.caliper-slot-num {
+  font-size: 0.6875rem;
   font-weight: 700;
+  line-height: 1;
   color: var(--text-muted);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  padding: 2px 9px;
-  border-radius: 999px;
-  pointer-events: none;
+  opacity: 0.65;
   white-space: nowrap;
 }
 
-.caliper-track.is-dragging .caliper-badge {
+.caliper-slot.is-center .caliper-slot-num {
+  color: var(--primary);
+  opacity: 1;
+  font-weight: 800;
+}
+
+.caliper-slot-tick {
+  width: 2px;
+  height: 12px;
+  border-radius: 1px;
+  background: var(--text-dim);
+  opacity: 0.6;
+}
+
+.caliper-slot.is-center .caliper-slot-tick {
+  height: 15px;
+  background: var(--primary);
+  opacity: 1;
+}
+
+.caliper-slot.is-empty {
+  visibility: hidden;
+}
+
+.caliper-pointer-top {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 5px solid var(--primary);
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* Single-Line Rep Selector with Quiet -1 / +1 Bookends */
+.rep-selector-bar {
+  display: flex;
+  align-items: stretch;
+  flex-wrap: nowrap;
+  gap: 6px;
+  width: 100%;
+}
+
+.rep-nudge-btn {
+  appearance: none;
+  flex: 0 0 38px;
+  width: 38px;
+  min-height: 44px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px dashed var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 100ms ease-out, border-color 120ms ease, color 120ms ease, background-color 120ms ease;
+}
+
+.rep-nudge-btn:hover {
+  border-color: var(--text-muted);
+  color: var(--text);
+}
+
+.rep-nudge-btn:active {
+  transform: scale(0.94);
+  background: var(--surface-2);
+}
+
+.rep-target-strip {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 4px;
+  padding: 3px;
+  background: var(--bg);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  scroll-snap-type: x proximity;
+}
+
+.rep-target-strip::-webkit-scrollbar {
+  display: none;
+}
+
+.rep-target-btn {
+  appearance: none;
+  flex: 1 0 34px;
+  min-width: 34px;
+  min-height: 38px;
+  padding: 0 2px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.9375rem;
+  font-weight: 800;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  scroll-snap-align: center;
+  transition: transform 100ms ease-out, background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.rep-target-btn:active {
+  transform: scale(0.95);
+}
+
+.rep-target-btn.is-active {
   background: var(--primary);
   border-color: var(--primary);
   color: var(--primary-fg);
@@ -2964,7 +3041,7 @@ input[type="number"] {
     font-size: 1.25rem !important; /* 20px */
   }
   input[type="number"].rack-weight-input {
-    font-size: 2.5rem !important; /* 40px monumental scoreboard numeral */
+    font-size: 2.75rem !important; /* 44px monumental scoreboard numeral */
   }
 }
 
@@ -3174,6 +3251,8 @@ input[type="number"] {
   .set-ticket:active,
   .fuel-chamber:active,
   .rir-stop:active,
+  .rep-nudge-btn:active,
+  .rep-target-btn:active,
   .phase-matrix-cell:active {
     transform: none;
   }

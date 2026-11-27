@@ -2027,12 +2027,6 @@ function renderTrainView({ overrideExpandedIds = null } = {}) {
           ` : ''}
 
           <div class="rack-scoreboard ${isStamped ? 'is-stamped' : ''}">
-            <div class="rack-set-col ${selSet.done ? 'is-done' : ''}">
-              <span class="rack-set-kicker">SET</span>
-              <span class="rack-set-num display-num">${String(selIdx + 1).padStart(2, '0')}</span>
-              <span class="rack-set-of">OF ${String(setRows.length).padStart(2, '0')}</span>
-            </div>
-
             <div class="rack-metric-col">
               <label class="rack-metric-label" for="rack-w-${ex.id}-${selIdx}">WEIGHT (LB)</label>
               <input id="rack-w-${ex.id}-${selIdx}" type="number" step="${smallStep}" inputmode="decimal"
@@ -2055,18 +2049,17 @@ function renderTrainView({ overrideExpandedIds = null } = {}) {
 
           <div class="control-group">
             <div class="control-label-row">
-              <span>Slide Caliper or Tap ±${smallStep} lb</span>
+              <span>Slide Ruler or Tap ±${smallStep} lb</span>
               ${hasDifferentUpcomingWeight ? `<button type="button" class="btn btn-sm btn-ghost" style="min-height:28px;padding:2px 8px;color:var(--info);" data-action="copy-weight-rest" data-ex="${ex.id}" data-idx="${selIdx}">Copy to remaining</button>` : `<span class="tabular" style="color:var(--text-muted);">Hold ± to fast-step</span>`}
             </div>
             <div class="caliper-row">
               <button type="button" class="tap-chip caliper-step-btn" data-action="nudge-weight" data-ex="${ex.id}" data-idx="${selIdx}" data-delta="-${smallStep}" aria-label="Decrease weight by ${smallStep} pounds">-${smallStep}</button>
-              <div class="caliper-track" role="slider" tabindex="0" aria-label="Drag to adjust Set ${selIdx + 1} weight" aria-valuemin="0" aria-valuemax="500" aria-valuenow="${wNum}"
+              <div class="caliper-track" role="slider" tabindex="0" aria-label="Drag ruler to adjust Set ${selIdx + 1} weight" aria-valuemin="0" aria-valuemax="500" aria-valuenow="${wNum}"
                 data-caliper-track="true" data-ex="${ex.id}" data-idx="${selIdx}" data-step="${smallStep}">
-                <div class="caliper-ticks-inner" aria-hidden="true">
-                  ${Array.from({ length: 25 }, (_, k) => `<span class="caliper-tick ${k % 4 === 0 ? 'is-major' : 'is-minor'}"></span>`).join('')}
+                <div class="caliper-pointer-top" aria-hidden="true"></div>
+                <div class="caliper-tape" data-caliper-tape="${ex.id}_${selIdx}" aria-hidden="true">
+                  ${renderCaliperTapeSlots(wNum, smallStep)}
                 </div>
-                <div class="caliper-needle" aria-hidden="true"></div>
-                <span class="caliper-badge tabular" data-caliper-badge="true">◂ drag ±${smallStep} lb ▸</span>
               </div>
               <button type="button" class="tap-chip caliper-step-btn" data-action="nudge-weight" data-ex="${ex.id}" data-idx="${selIdx}" data-delta="${smallStep}" aria-label="Increase weight by ${smallStep} pounds">+${smallStep}</button>
             </div>
@@ -2077,12 +2070,14 @@ function renderTrainView({ overrideExpandedIds = null } = {}) {
               <span>${ex.leftFirst ? 'Left-Arm Reps (Stop Right at same)' : `Target Reps (${ex.repMin === ex.repMax ? ex.repMax : `${ex.repMin}–${ex.repMax}`})`}</span>
               <span class="tabular">${rNum} reps</span>
             </div>
-            <div class="rep-chips-grid ${repTotalChips <= 6 ? 'cols-compact' : 'cols-4'}">
-              <button type="button" class="tap-chip" data-action="nudge-reps" data-ex="${ex.id}" data-idx="${selIdx}" data-delta="-1" aria-label="Decrease reps">-1</button>
-              ${repOptions.map((r) => `
-                <button type="button" class="tap-chip ${rNum === r ? 'is-active' : ''}" data-action="pick-reps" data-ex="${ex.id}" data-idx="${selIdx}" data-val="${r}">${r}</button>
-              `).join('')}
-              <button type="button" class="tap-chip" data-action="nudge-reps" data-ex="${ex.id}" data-idx="${selIdx}" data-delta="1" aria-label="Increase reps">+1</button>
+            <div class="rep-selector-bar">
+              <button type="button" class="rep-nudge-btn tabular" data-action="nudge-reps" data-ex="${ex.id}" data-idx="${selIdx}" data-delta="-1" aria-label="Decrease reps by 1">-1</button>
+              <div class="rep-target-strip" role="group" aria-label="Target reps">
+                ${repOptions.map((r) => `
+                  <button type="button" class="rep-target-btn tabular ${rNum === r ? 'is-active' : ''}" data-action="pick-reps" data-ex="${ex.id}" data-idx="${selIdx}" data-val="${r}">${r}</button>
+                `).join('')}
+              </div>
+              <button type="button" class="rep-nudge-btn tabular" data-action="nudge-reps" data-ex="${ex.id}" data-idx="${selIdx}" data-delta="1" aria-label="Increase reps by 1">+1</button>
             </div>
           </div>
 
@@ -3371,6 +3366,25 @@ function renderMain({ overrideExpandedIds = null } = {}) {
   lastStampedKey = null;
 }
 
+function renderCaliperTapeSlots(centerWeight, step) {
+  const base = Number.isFinite(centerWeight) ? centerWeight : 0;
+  const s = Number(step) || 5;
+  let html = '';
+  for (let offset = -4; offset <= 4; offset++) {
+    const val = Number((base + offset * s).toFixed(1));
+    const isEmpty = val < 0;
+    const isCenter = offset === 0;
+    const label = val === 0 ? 'BW' : String(val);
+    html += `
+      <span class="caliper-slot ${isCenter ? 'is-center' : ''} ${isEmpty ? 'is-empty' : ''}">
+        <span class="caliper-slot-num tabular">${isEmpty ? '' : label}</span>
+        <span class="caliper-slot-tick"></span>
+      </span>
+    `;
+  }
+  return html;
+}
+
 function syncLiveRackScoreboardDom(exId, idx, row, ex) {
   const key = `${exId}_${idx}`;
   const wNum = Number(row.weight) || 0;
@@ -3379,6 +3393,14 @@ function syncLiveRackScoreboardDom(exId, idx, row, ex) {
   const inputEl = document.querySelector(`[data-caliper-input="${key}"]`);
   if (inputEl && document.activeElement !== inputEl) {
     inputEl.value = row.weight === '' ? '' : String(row.weight);
+  }
+
+  const tapeEl = document.querySelector(`[data-caliper-tape="${key}"]`);
+  if (tapeEl) {
+    const trackEl = tapeEl.closest('[data-caliper-track]');
+    const step = Number(trackEl?.dataset.step) || 5;
+    tapeEl.innerHTML = renderCaliperTapeSlots(wNum, step);
+    if (trackEl) trackEl.setAttribute('aria-valuenow', String(wNum));
   }
 
   const ticketEl = document.querySelector(`[data-ticket-val-for="${key}"]`);
@@ -4727,6 +4749,7 @@ document.getElementById('rest-stop').addEventListener('click', stopRestTimer);
 
 // ---------- Vernier Caliper Drag & Press-and-Hold Steppers ----------
 (function initCaliperAndHoldInteractions() {
+  const CALIPER_SLOT_PX = 36;
   let caliperSession = null;
 
   document.addEventListener('pointerdown', (e) => {
@@ -4743,8 +4766,7 @@ document.getElementById('rest-stop').addEventListener('click', stopRestTimer);
     const startW = Number(row.weight) || 0;
     caliperSession = {
       track,
-      ticksEl: track.querySelector('.caliper-ticks-inner'),
-      badgeEl: track.querySelector('[data-caliper-badge]'),
+      tapeEl: track.querySelector('[data-caliper-tape]'),
       exId,
       idx,
       step,
@@ -4763,37 +4785,33 @@ document.getElementById('rest-stop').addEventListener('click', stopRestTimer);
   document.addEventListener('pointermove', (e) => {
     if (!caliperSession || e.pointerId !== caliperSession.pointerId) return;
     const dx = e.clientX - caliperSession.startX;
-    if (Math.abs(dx) > 4) caliperSession.moved = true;
-    const steps = Math.round(dx / 14);
-    const rawNext = Math.max(0, caliperSession.startW + steps * caliperSession.step);
-    const nextW = Number(rawNext.toFixed(1));
+    if (Math.abs(dx) > 3) caliperSession.moved = true;
 
-    if (caliperSession.ticksEl) {
-      const shift = ((dx % 28) + 28) % 28 - 14;
-      caliperSession.ticksEl.style.transform = `translate3d(${shift.toFixed(1)}px, 0, 0)`;
-    }
+    // Natural iOS / physical ruler scroll: dragging LEFT (dx < 0) pulls higher weights on the right under the center pointer
+    const minSteps = -Math.floor(caliperSession.startW / caliperSession.step);
+    const rawSteps = Math.round(-dx / CALIPER_SLOT_PX);
+    const steps = Math.max(minSteps, rawSteps);
+    const nextW = Math.max(0, Number((caliperSession.startW + steps * caliperSession.step).toFixed(1)));
 
     if (nextW !== caliperSession.lastW) {
       caliperSession.lastW = nextW;
       caliperSession.row.weight = nextW === 0 ? '' : String(nextW);
       caliperSession.row.weightEdited = true;
-      caliperSession.track.setAttribute('aria-valuenow', String(nextW));
-      const diff = Number((nextW - caliperSession.startW).toFixed(1));
-      if (caliperSession.badgeEl) {
-        caliperSession.badgeEl.textContent = diff === 0
-          ? `${nextW || 'BW'} lb`
-          : `${diff > 0 ? '+' : ''}${diff} lb → ${nextW || 'BW'}`;
-      }
       syncLiveRackScoreboardDom(caliperSession.exId, caliperSession.idx, caliperSession.row, caliperSession.ex);
+    }
+
+    if (caliperSession.tapeEl) {
+      const clampedDx = Math.min(-minSteps * CALIPER_SLOT_PX, dx);
+      const remainderPx = clampedDx + steps * CALIPER_SLOT_PX;
+      caliperSession.tapeEl.style.transform = `translate3d(${remainderPx.toFixed(1)}px, 0, 0)`;
     }
   });
 
   function finishCaliper() {
     if (!caliperSession) return;
-    const { track, ticksEl, badgeEl, step, moved, lastW, startW } = caliperSession;
+    const { track, tapeEl, moved, lastW, startW } = caliperSession;
     track.classList.remove('is-dragging');
-    if (ticksEl) ticksEl.style.transform = '';
-    if (badgeEl) badgeEl.textContent = `◂ drag ±${step} lb ▸`;
+    if (tapeEl) tapeEl.style.transform = '';
     caliperSession = null;
     if (moved && lastW !== startW) {
       saveState();

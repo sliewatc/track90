@@ -16,7 +16,7 @@
 - `--danger`: Destructive reset/delete actions and validation errors.
 
 ## Signature Instruments
-- **Rack Scoreboard & Vernier Caliper (`Train`):** Monumental 3-column live equation (`SET 01/03` | `135 LB` | `× 8 REPS`) above a Set Ticket Track, drag-to-scrub Weight Caliper with press-and-hold flanking paddles, single-row target rep blocks, and compact RIR effort rail.
+- **Rack Scoreboard & Numbered Vernier Ruler (`Train`):** Symmetrical 2-column live equation (`WEIGHT (LB) 155` `×` `REPS 5`) beneath the Set Ticket Track (`S1 | S2 | S3 | +`), live numbered natural-scroll weight ruler (drag left to pull higher weights under the center pointer), single-row target rep strip flanked by quiet dashed `-1`/`+1` bookends, and compact RIR effort rail.
 - **4-Bolus Protein Fuel Tank (`Today`):** Architectural 2×2 protein fuel chambers feeding a live `g / 185g` tank gauge + inline Steps/Sleep meters.
 - **90-Day Phase Matrix & Velocity Gauge (`Progress`):** Interactive 90-cell calendar grid spanning Phase 1 → Wk 7 Deload → Phase 2 + live weekly `lb/wk` recomp sweet-spot gauge.
 - **Floor-Readable Morphing Rest HUD (`Global`):** Expands from the slim bottom dock into a full-viewport rest readout showing exact `UP NEXT` set telemetry and big thumb paddles.
