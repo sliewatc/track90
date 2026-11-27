@@ -7,7 +7,6 @@ import {
   getMacroTargets,
   getEffectiveExerciseSpec,
   computeRampUpSets,
-  computeBarbellPlatesPerSide,
   evaluateDoubleProgression,
   computeRollingAverage,
   evaluateBiweeklyAdjustment,
@@ -162,7 +161,11 @@ let planEditorDraft = null;
 let showFullPlanDoc = false;
 let justCheckedTarget = null;
 let selectedChartIdx = null;
+let selectedMatrixDay = null;
+let restHudOpen = false;
+let lastStampedKey = null;
 let openWhyByEx = {};
+let suppressClickUntil = 0;
 
 let sharedAudioCtx = null;
 let chimeAudioEl = null;
@@ -784,7 +787,106 @@ function stopRestTimer() {
   timer = createDefaultRestTimerState();
   persistRestTimer();
   syncWakeLock();
+  setRestHudOpen(false);
   renderRestDock();
+}
+
+function getNextUpSetContext() {
+  const workoutId = state.activeWorkoutId;
+  const workout = getWorkouts()[workoutId];
+  const draft = state.draftWorkouts[workoutId];
+  if (!workout || !draft) return null;
+
+  let ex = workout.exercises.find((e) => e.id === draft.activeExId);
+  if (!ex || !(draft.sets?.[ex.id] || []).some((s) => !s.done)) {
+    ex = workout.exercises.find((e) => (draft.sets?.[e.id] || []).some((s) => !s.done));
+  }
+  if (!ex) return null;
+  const sets = draft.sets?.[ex.id] || [];
+  let idx = draft.activeSetIdxByEx?.[ex.id] ?? 0;
+  if (!sets[idx] || sets[idx].done) {
+    const firstPending = sets.findIndex((s) => !s.done);
+    if (firstPending >= 0) idx = firstPending;
+  }
+  const row = sets[idx];
+  if (!row) return null;
+  const activeName = state.swapsBySlot[ex.id] || ex.name;
+  return {
+    exerciseName: activeName,
+    setNum: idx + 1,
+    totalSets: sets.length,
+    weight: row.weight || 'BW',
+    reps: Number(row.reps) || ex.repMin,
+    repRange: ex.repMin === ex.repMax ? `${ex.repMax}` : `${ex.repMin}–${ex.repMax}`
+  };
+}
+
+function setRestHudOpen(open) {
+  const hud = document.getElementById('rest-hud');
+  if (!hud) return;
+  restHudOpen = Boolean(open) && timer.active;
+  if (restHudOpen) {
+    renderRestHud();
+    showAnimatedEl(hud);
+  } else {
+    hideAnimatedEl(hud);
+  }
+}
+
+function renderRestHud() {
+  const hud = document.getElementById('rest-hud');
+  if (!hud || !timer.active) return;
+  const isDone = timer.remainingSec <= 0;
+  hud.classList.toggle('is-done', isDone);
+  hud.classList.toggle('is-paused', timer.paused && !isDone);
+
+  const prefix = isDone ? 'REST COMPLETE' : timer.paused ? 'PAUSED' : 'RESTING';
+  const titleEl = document.getElementById('rest-hud-title');
+  if (titleEl) titleEl.textContent = `${prefix} · ${timer.label}`;
+  const kickerEl = document.getElementById('rest-hud-kicker');
+  if (kickerEl) kickerEl.textContent = isDone ? 'TIME TO LIFT' : timer.paused ? 'TIMER PAUSED' : 'RECOVER BEFORE NEXT SET';
+  const timeEl = document.getElementById('rest-hud-time');
+  if (timeEl) timeEl.textContent = isDone ? 'GO!' : formatMMSS(timer.remainingSec);
+
+  const bar = document.getElementById('rest-hud-bar');
+  if (bar) {
+    const ratio = isDone ? 1 : (timer.totalSec > 0 ? Math.max(0, Math.min(1, timer.remainingSec / timer.totalSec)) : 0);
+    bar.style.transform = `scaleX(${ratio.toFixed(4)})`;
+    bar.style.background = isDone ? 'var(--success)' : 'var(--amber)';
+  }
+
+  const toggleBtn = document.getElementById('rest-hud-toggle');
+  if (toggleBtn) {
+    toggleBtn.textContent = isDone ? 'Restart' : timer.paused ? 'Resume' : 'Pause';
+    toggleBtn.className = `btn rest-hud-paddle ${isDone ? 'btn-primary' : 'btn-amber'}`;
+  }
+  const minusBtn = document.getElementById('rest-hud-minus');
+  if (minusBtn) minusBtn.disabled = isDone;
+
+  const alertBtn = document.getElementById('rest-hud-alert');
+  if (alertBtn) {
+    const disp = getRestAlertButtonDisplay();
+    alertBtn.innerHTML = `${icon(disp.iconName)}<span>${disp.label}</span>`;
+    alertBtn.className = `btn btn-sm rest-chime-btn ${disp.on ? 'is-on' : 'is-off'}`;
+    alertBtn.setAttribute('aria-pressed', String(disp.on));
+  }
+
+  const nextEl = document.getElementById('rest-hud-next');
+  if (nextEl) {
+    const nextCtx = getNextUpSetContext();
+    if (nextCtx) {
+      nextEl.innerHTML = `
+        <div class="rest-hud-next-label">UP NEXT · ${escapeHtml(nextCtx.exerciseName)}</div>
+        <div class="rest-hud-next-main display-num">SET ${String(nextCtx.setNum).padStart(2, '0')} OF ${String(nextCtx.totalSets).padStart(2, '0')} · ${escapeHtml(String(nextCtx.weight))}${nextCtx.weight === 'BW' ? '' : ' LB'} × ${nextCtx.reps}</div>
+        <div class="rest-hud-next-sub">Target ${escapeHtml(nextCtx.repRange)} reps · Focus on clean execution</div>
+      `;
+    } else {
+      nextEl.innerHTML = `
+        <div class="rest-hud-next-label">REST TIMER</div>
+        <div class="rest-hud-next-main display-num">${escapeHtml(timer.label)}</div>
+      `;
+    }
+  }
 }
 
 function formatMMSS(sec) {
@@ -851,6 +953,10 @@ function renderRestDock() {
     const ratio = isDone ? 1 : (timer.totalSec > 0 ? Math.max(0, Math.min(1, timer.remainingSec / timer.totalSec)) : 0);
     bar.style.transform = `scaleX(${ratio.toFixed(4)})`;
     bar.style.background = isDone ? 'var(--success)' : 'var(--amber)';
+  }
+
+  if (restHudOpen) {
+    renderRestHud();
   }
 }
 
@@ -1211,21 +1317,12 @@ function formatHumanDate(iso) {
   return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
 }
 
-function renderBarbellPlateChips(plates) {
-  if (!plates) return '';
-  if (plates.length === 0) {
-    return '<div class="plate-chips-row"><span class="plate-label">Empty 45 lb barbell</span></div>';
-  }
-  return `
-    <div class="plate-chips-row">
-      <span class="plate-label">Per side:</span>
-      ${plates.map((p) => {
-        const cls = p === 45 ? 'plate-45' : p === 25 ? 'plate-25' : '';
-        return `<span class="plate-chip tabular ${cls}">${p}</span>`;
-      }).join('')}
-    </div>
-  `;
-}
+const FUEL_MEAL_META = {
+  m1: { code: 'M1', grams: 45, shortTime: 'AM Start', shortNote: '40–45g · Protein + fiber' },
+  m2: { code: 'M2', grams: 40, shortTime: 'Before 1 PM', shortNote: '40g · 12–15g fiber' },
+  m3: { code: 'M3', grams: 60, shortTime: 'Post-WO / Dinner', shortNote: '55–65g · 60–70% carbs' },
+  m4: { code: 'M4', grams: 40, shortTime: 'Pre-Sleep', shortNote: '35–40g · Casein / yogurt' }
+};
 
 function openQuickWeighInModal(dateStr = state.selectedDate) {
   const existing = state.weightLogs.find((w) => w.date === dateStr);
@@ -1543,28 +1640,47 @@ function renderTodayView() {
 
     <div class="grid-2">
       <section class="card">
-        <div class="card-header card-header-inline">
-          <div style="min-width:0;">
-            <h2 class="card-title">4-Meal Protein Bolus (${mealsDone}/4)</h2>
-            <p class="card-meta">Spaced 3–4h apart · Meal 4 is Pre-Sleep Anchor</p>
-          </div>
-          <span class="tag ${mealsDone === 4 ? 'tag-success' : ''}">${mealsDone === 4 ? '180–185g Hit' : `${mealsDone}/4`}</span>
-        </div>
-        <div class="check-list">
-          ${NUTRITION.meals.map((m) => {
-            const done = Boolean(log.meals[m.id]);
-            const justChecked = done && justCheckedTarget === `meal:${m.id}`;
-            return `
-              <button type="button" class="check-row ${done ? 'done' : ''} ${justChecked ? 'just-checked' : ''}" data-action="toggle-meal" data-id="${m.id}">
-                <div>
-                  <div style="font-weight:700;font-size:0.9375rem;">${escapeHtml(m.title)} · <span class="text-info">${escapeHtml(m.target)}</span></div>
-                  <div class="muted-sm">${escapeHtml(m.timing)} · ${escapeHtml(m.detail)}</div>
-                </div>
-                <span class="check-box">${done ? icon('check') : ''}</span>
-              </button>
-            `;
-          }).join('')}
-        </div>
+        ${(() => {
+          const proteinLogged = NUTRITION.meals.reduce((sum, m) => sum + (log.meals[m.id] ? (FUEL_MEAL_META[m.id]?.grams || 45) : 0), 0);
+          const proteinGoal = 185;
+          const fuelRatio = Math.min(1, proteinLogged / proteinGoal);
+          return `
+            <div class="card-header card-header-inline">
+              <div style="min-width:0;">
+                <h2 class="card-title">Protein Fuel Tank</h2>
+                <p class="card-meta">4 boluses spaced 3–4h · Tap chambers to fill</p>
+              </div>
+              <span class="tag ${mealsDone === 4 ? 'tag-success' : 'tag-info'} tabular">${mealsDone}/4 Boluses</span>
+            </div>
+            <div class="fuel-tank-head">
+              <div class="fuel-tank-figure">
+                <span class="fuel-tank-num display-num">${proteinLogged}</span>
+                <span class="fuel-tank-den tabular">/ ${proteinGoal}g P</span>
+              </div>
+              <span class="muted-sm tabular">${mealsDone === 4 ? 'Floor locked in' : `${proteinGoal - proteinLogged}g left`}</span>
+            </div>
+            <div class="fuel-bar-track" aria-hidden="true">
+              <div class="bar-fill" style="transform: scaleX(${fuelRatio.toFixed(4)});background:${mealsDone === 4 ? 'var(--success)' : 'var(--info)'};"></div>
+            </div>
+            <div class="fuel-chambers">
+              ${NUTRITION.meals.map((m) => {
+                const done = Boolean(log.meals[m.id]);
+                const justChecked = done && justCheckedTarget === `meal:${m.id}`;
+                const meta = FUEL_MEAL_META[m.id] || { code: m.id.toUpperCase(), grams: 45, shortTime: m.timing, shortNote: m.detail };
+                return `
+                  <button type="button" class="fuel-chamber ${done ? 'done' : ''} ${justChecked ? 'just-checked' : ''}" data-action="toggle-meal" data-id="${m.id}" aria-pressed="${done}">
+                    <div class="fuel-chamber-top">
+                      <span class="fuel-chamber-id">${escapeHtml(meta.code)} · ${escapeHtml(meta.shortTime)}</span>
+                      <span class="fuel-chamber-check">${done ? icon('check') : ''}</span>
+                    </div>
+                    <div class="fuel-chamber-grams display-num">${meta.grams}g</div>
+                    <div class="fuel-chamber-meta">${escapeHtml(meta.shortNote)}</div>
+                  </button>
+                `;
+              }).join('')}
+            </div>
+          `;
+        })()}
       </section>
 
       <section class="card">
@@ -1593,8 +1709,11 @@ function renderTodayView() {
         <div class="divider" style="margin:12px 0;"></div>
         <div class="control-group">
           <div class="control-label-row">
-            <span>Steps</span>
+            <span>Steps <span class="muted-sm tabular">(${Number(log.steps) ? `${Number(log.steps).toLocaleString()} / 10k` : 'Target 8–10k'})</span></span>
             <input type="number" inputmode="numeric" aria-label="Custom steps" placeholder="Custom" class="text-input" style="width:96px;min-height:32px;padding:4px 8px;" value="${escapeHtml(log.steps)}" data-action="update-daily-num" data-field="steps" />
+          </div>
+          <div class="daily-meter-bar" aria-hidden="true">
+            <div class="bar-fill" style="transform: scaleX(${Math.min(1, Math.max(0, (Number(log.steps) || 0) / 10000)).toFixed(4)});background:${(Number(log.steps) || 0) >= 8000 ? 'var(--success)' : 'var(--info)'};"></div>
           </div>
           <div class="tap-chips-row">
             ${['8000', '9000', '10000', '12000'].map((val) => `
@@ -1605,8 +1724,11 @@ function renderTodayView() {
 
         <div class="control-group" style="margin-top:12px;">
           <div class="control-label-row">
-            <span>Sleep (hrs)</span>
+            <span>Sleep <span class="muted-sm tabular">(${Number(log.sleep) ? `${Number(log.sleep)} / 8h` : 'Target 7–8h'})</span></span>
             <input type="number" step="0.5" inputmode="decimal" aria-label="Custom sleep hours" placeholder="Custom" class="text-input" style="width:96px;min-height:32px;padding:4px 8px;" value="${escapeHtml(log.sleep)}" data-action="update-daily-num" data-field="sleep" />
+          </div>
+          <div class="daily-meter-bar" aria-hidden="true">
+            <div class="bar-fill" style="transform: scaleX(${Math.min(1, Math.max(0, (Number(log.sleep) || 0) / 8)).toFixed(4)});background:${(Number(log.sleep) || 0) >= 7 ? 'var(--success)' : 'var(--amber)'};"></div>
           </div>
           <div class="tap-chips-row">
             ${['6.5', '7', '7.5', '8', '8.5'].map((val) => `
@@ -1708,21 +1830,43 @@ function renderTrainView({ overrideExpandedIds = null } = {}) {
     const effectiveBarbell = isActiveExerciseBarbell(ex, activeName);
     const weightStep = getExerciseWeightStep(ex, activeName);
     const smallStep = effectiveBarbell ? 5 : 2.5;
-    const largeStep = effectiveBarbell ? 10 : 5;
     const repOptions = [];
     for (let r = ex.repMin; r <= ex.repMax; r++) repOptions.push(r);
     const rirOptions = ['0', '1', '1.5', '2', '3'];
     const isActiveFocus = ex.id === draft.activeExId;
     const isRestPauseFinisher = Boolean(spec.activeIntensifier && /rest-pause/i.test(spec.activeIntensifier));
 
-    const showBarbellPlates = effectiveBarbell;
-    const platesPerSide = showBarbellPlates ? computeBarbellPlatesPerSide(wNum) : null;
     const savedSetupNote = String(state.exerciseNotes?.[ex.id] || '').trim();
     const perfKey = getPerfKey(ex.id, activeName, ex.name);
     const historyCount = getExerciseHistoryTrail(state.workoutHistory, perfKey, 20).length;
     const whyOpen = Boolean(openWhyByEx[ex.id]);
     const hasDifferentUpcomingWeight = selIdx < setRows.length - 1 &&
       setRows.slice(selIdx + 1).some((s) => !s.done && String(s.weight ?? '') !== String(selSet.weight ?? ''));
+
+    const prevSet = prev?.sets?.[selIdx] || prev?.sets?.[prev.sets.length - 1] || null;
+    const prevSetWeight = prevSet ? Number(prevSet.weight) || 0 : null;
+    let weightDeltaText = wNum > 0 ? 'Working load' : 'Bodyweight';
+    let weightDeltaColor = 'var(--text-muted)';
+    if (prevSetWeight !== null && prevSetWeight > 0 && wNum > 0) {
+      const diff = Number((wNum - prevSetWeight).toFixed(1));
+      if (diff > 0) {
+        weightDeltaText = `+${diff} vs last ↑`;
+        weightDeltaColor = 'var(--success)';
+      } else if (diff < 0) {
+        weightDeltaText = `${diff} vs last`;
+        weightDeltaColor = 'var(--amber)';
+      } else {
+        weightDeltaText = `= last (${prevSet.weight}×${prevSet.reps})`;
+        weightDeltaColor = 'var(--info)';
+      }
+    }
+
+    const repZone = rNum >= ex.repMax
+      ? { label: 'TOP OF RANGE', cls: 'zone-top' }
+      : rNum >= ex.repMin
+        ? { label: `TARGET ${ex.repMin}–${ex.repMax}`, cls: 'zone-in' }
+        : { label: `BELOW ${ex.repMin}`, cls: 'zone-low' };
+    const isStamped = lastStampedKey === `${ex.id}_${selIdx}`;
 
     const rampOpen = Boolean(draft.rampOpen[ex.id]);
     const rampSets = ex.rampUp ? computeRampUpSets(wNum || ex.defaultWeight || 135, effectiveBarbell) : [];
@@ -1852,26 +1996,29 @@ function renderTrainView({ overrideExpandedIds = null } = {}) {
           </div>
         ` : ''}
 
-        <!-- Set Selector Strip + Add/Remove Set -->
-        <div class="set-pills-strip" role="tablist" aria-label="Sets for ${escapeHtml(activeName)}">
+        <!-- Set Ticket Track + Add/Remove Set -->
+        <div class="set-ticket-track" role="tablist" aria-label="Sets for ${escapeHtml(activeName)}">
           ${setRows.map((s, idx) => {
             const prevForSet = prev?.sets?.[idx];
-            const pillSub = s.done
-              ? `: ${s.weight || 'BW'}×${s.reps}`
-              : (prevForSet ? ` · ${prevForSet.weight || 'BW'}×${prevForSet.reps}` : '');
+            const dispWeight = s.weight !== '' ? s.weight : (prevForSet?.weight || 'BW');
+            const dispReps = Number(s.reps) || prevForSet?.reps || ex.repMin;
+            const statusText = s.done ? 'DONE' : idx === selIdx ? 'LIVE' : 'NEXT';
             return `
-              <button type="button" class="set-tab-pill ${idx === selIdx ? 'is-selected' : ''} ${s.done ? 'is-done' : ''}"
-                data-action="select-set" data-ex="${ex.id}" data-idx="${idx}">
-                ${s.done ? icon('check') : ''}
-                <span class="tabular">S${idx + 1}${pillSub}</span>
+              <button type="button" class="set-ticket ${idx === selIdx ? 'is-selected' : ''} ${s.done ? 'is-done' : ''}"
+                data-action="select-set" data-ex="${ex.id}" data-idx="${idx}" aria-selected="${idx === selIdx}">
+                <div class="set-ticket-top">
+                  <span>S${idx + 1}</span>
+                  <span>${s.done ? '✓' : statusText}</span>
+                </div>
+                <div class="set-ticket-val tabular" data-ticket-val-for="${ex.id}_${idx}">${escapeHtml(String(dispWeight))}×${dispReps}</div>
               </button>
             `;
           }).join('')}
-          <button type="button" class="set-tab-pill" data-action="add-extra-set" data-ex="${ex.id}" title="Add an extra working set">+ Set</button>
-          ${(draft.extraSetsByEx?.[ex.id] || 0) > 0 ? `<button type="button" class="set-tab-pill" data-action="remove-extra-set" data-ex="${ex.id}" title="Remove last extra set">- Set</button>` : ''}
+          <button type="button" class="set-ticket-mod" data-action="add-extra-set" data-ex="${ex.id}" aria-label="Add an extra working set" title="Add an extra working set">+</button>
+          ${(draft.extraSetsByEx?.[ex.id] || 0) > 0 ? `<button type="button" class="set-ticket-mod" data-action="remove-extra-set" data-ex="${ex.id}" aria-label="Remove last extra set" title="Remove last extra set">−</button>` : ''}
         </div>
 
-        <!-- Zero-Typing Active Set Thumb Deck -->
+        <!-- Concept A — Monumental Rack Scoreboard & Vernier Caliper Deck -->
         <div class="logger-section">
           ${isFinalSet && spec.activeIntensifier ? `
             <div class="tag tag-warn" style="white-space:normal;padding:8px 12px;">
@@ -1879,26 +2026,55 @@ function renderTrainView({ overrideExpandedIds = null } = {}) {
             </div>
           ` : ''}
 
-          <div class="control-group">
-            <div class="control-label-row">
-              <span>Set ${selIdx + 1} Weight (lbs)</span>
-              ${hasDifferentUpcomingWeight ? `<button type="button" class="btn btn-sm btn-ghost" style="min-height:28px;padding:2px 8px;color:var(--info);" data-action="copy-weight-rest" data-ex="${ex.id}" data-idx="${selIdx}">Copy to remaining</button>` : ''}
+          <div class="rack-scoreboard ${isStamped ? 'is-stamped' : ''}">
+            <div class="rack-set-col ${selSet.done ? 'is-done' : ''}">
+              <span class="rack-set-kicker">SET</span>
+              <span class="rack-set-num display-num">${String(selIdx + 1).padStart(2, '0')}</span>
+              <span class="rack-set-of">OF ${String(setRows.length).padStart(2, '0')}</span>
             </div>
-            <div class="stepper-row">
-              <button type="button" class="tap-chip" data-action="nudge-weight" data-ex="${ex.id}" data-idx="${selIdx}" data-delta="-${largeStep}">-${largeStep}</button>
-              <button type="button" class="tap-chip" data-action="nudge-weight" data-ex="${ex.id}" data-idx="${selIdx}" data-delta="-${smallStep}">-${smallStep}</button>
-              <input type="number" step="${smallStep}" inputmode="decimal" aria-label="Set ${selIdx + 1} weight" class="num-input"
+
+            <div class="rack-metric-col">
+              <label class="rack-metric-label" for="rack-w-${ex.id}-${selIdx}">WEIGHT (LB)</label>
+              <input id="rack-w-${ex.id}-${selIdx}" type="number" step="${smallStep}" inputmode="decimal"
+                aria-label="Set ${selIdx + 1} weight in pounds"
+                class="rack-weight-input display-num"
                 value="${escapeHtml(selSet.weight)}" placeholder="BW"
-                data-action="edit-set" data-ex="${ex.id}" data-idx="${selIdx}" data-field="weight" />
-              <button type="button" class="tap-chip" data-action="nudge-weight" data-ex="${ex.id}" data-idx="${selIdx}" data-delta="${smallStep}">+${smallStep}</button>
-              <button type="button" class="tap-chip" data-action="nudge-weight" data-ex="${ex.id}" data-idx="${selIdx}" data-delta="${largeStep}">+${largeStep}</button>
+                data-action="edit-set" data-ex="${ex.id}" data-idx="${selIdx}" data-field="weight"
+                data-caliper-input="${ex.id}_${selIdx}" />
+              <span class="rack-metric-sub tabular" data-weight-delta-for="${ex.id}_${selIdx}" data-prev-weight="${prevSetWeight ?? ''}" data-prev-reps="${prevSet?.reps ?? ''}" style="color:${weightDeltaColor};">${escapeHtml(weightDeltaText)}</span>
             </div>
-            ${showBarbellPlates ? `<div data-plate-for="${ex.id}_${selIdx}">${renderBarbellPlateChips(platesPerSide)}</div>` : ''}
+
+            <div class="rack-x-sep" aria-hidden="true">×</div>
+
+            <div class="rack-metric-col">
+              <span class="rack-metric-label">${ex.leftFirst ? 'LEFT REPS' : 'REPS'}</span>
+              <div class="rack-rep-value display-num" data-rep-val-for="${ex.id}_${selIdx}">${rNum}</div>
+              <span class="rack-zone-pill ${repZone.cls}" data-rep-zone-for="${ex.id}_${selIdx}" data-rep-min="${ex.repMin}" data-rep-max="${ex.repMax}">${escapeHtml(repZone.label)}</span>
+            </div>
           </div>
 
           <div class="control-group">
             <div class="control-label-row">
-              <span>${ex.leftFirst ? 'Left-Arm Reps (Stop Right at same)' : `Reps (Target ${ex.repMin === ex.repMax ? ex.repMax : `${ex.repMin}–${ex.repMax}`})`}</span>
+              <span>Slide Caliper or Tap ±${smallStep} lb</span>
+              ${hasDifferentUpcomingWeight ? `<button type="button" class="btn btn-sm btn-ghost" style="min-height:28px;padding:2px 8px;color:var(--info);" data-action="copy-weight-rest" data-ex="${ex.id}" data-idx="${selIdx}">Copy to remaining</button>` : `<span class="tabular" style="color:var(--text-muted);">Hold ± to fast-step</span>`}
+            </div>
+            <div class="caliper-row">
+              <button type="button" class="tap-chip caliper-step-btn" data-action="nudge-weight" data-ex="${ex.id}" data-idx="${selIdx}" data-delta="-${smallStep}" aria-label="Decrease weight by ${smallStep} pounds">-${smallStep}</button>
+              <div class="caliper-track" role="slider" tabindex="0" aria-label="Drag to adjust Set ${selIdx + 1} weight" aria-valuemin="0" aria-valuemax="500" aria-valuenow="${wNum}"
+                data-caliper-track="true" data-ex="${ex.id}" data-idx="${selIdx}" data-step="${smallStep}">
+                <div class="caliper-ticks-inner" aria-hidden="true">
+                  ${Array.from({ length: 25 }, (_, k) => `<span class="caliper-tick ${k % 4 === 0 ? 'is-major' : 'is-minor'}"></span>`).join('')}
+                </div>
+                <div class="caliper-needle" aria-hidden="true"></div>
+                <span class="caliper-badge tabular" data-caliper-badge="true">◂ drag ±${smallStep} lb ▸</span>
+              </div>
+              <button type="button" class="tap-chip caliper-step-btn" data-action="nudge-weight" data-ex="${ex.id}" data-idx="${selIdx}" data-delta="${smallStep}" aria-label="Increase weight by ${smallStep} pounds">+${smallStep}</button>
+            </div>
+          </div>
+
+          <div class="control-group">
+            <div class="control-label-row">
+              <span>${ex.leftFirst ? 'Left-Arm Reps (Stop Right at same)' : `Target Reps (${ex.repMin === ex.repMax ? ex.repMax : `${ex.repMin}–${ex.repMax}`})`}</span>
               <span class="tabular">${rNum} reps</span>
             </div>
             <div class="rep-chips-grid ${repTotalChips <= 6 ? 'cols-compact' : 'cols-4'}">
@@ -1910,14 +2086,11 @@ function renderTrainView({ overrideExpandedIds = null } = {}) {
             </div>
           </div>
 
-          <div class="control-group">
-            <div class="control-label-row">
-              <span>RIR (Reps in Reserve)</span>
-              <span class="tabular">${workout.isOptionalPumpDay ? 'Cap at 2 RIR' : `${selSet.rir || '1.5'} RIR`}</span>
-            </div>
-            <div class="tap-chips-row">
+          <div class="rir-rail" role="group" aria-label="Reps in Reserve">
+            <span class="rir-rail-label">${workout.isOptionalPumpDay ? 'RIR (Cap 2)' : 'RIR'}</span>
+            <div class="rir-stops">
               ${rirOptions.map((val) => `
-                <button type="button" class="tap-chip tap-chip-rir ${String(selSet.rir) === val || (Number.isFinite(rirNum) && rirNum === Number(val)) ? 'is-active' : ''} ${workout.isOptionalPumpDay && val === '2' ? 'is-cap' : ''}"
+                <button type="button" class="rir-stop tabular ${String(selSet.rir) === val || (Number.isFinite(rirNum) && rirNum === Number(val)) ? 'is-active' : ''} ${workout.isOptionalPumpDay && val === '2' ? 'is-cap' : ''}"
                   data-action="pick-rir" data-ex="${ex.id}" data-idx="${selIdx}" data-val="${val}">${val}</button>
               `).join('')}
             </div>
@@ -1929,8 +2102,8 @@ function renderTrainView({ overrideExpandedIds = null } = {}) {
               ${icon('check')}
               <span data-log-label-for="${ex.id}_${selIdx}">
                 ${selSet.done
-                  ? `Re-Log Set ${selIdx + 1} (${selSet.weight || 'BW'} × ${rNum})`
-                  : `Log Set ${selIdx + 1}${ex.leftFirst ? ' (L→R)' : ''} · ${selSet.weight || 'BW'} × ${rNum}`}
+                  ? `Re-Stamp Set ${selIdx + 1} · ${selSet.weight || 'BW'} × ${rNum}`
+                  : `Stamp Set ${selIdx + 1}${ex.leftFirst ? ' (L→R)' : ''} · ${selSet.weight || 'BW'} × ${rNum}`}
               </span>
             </button>
             ${isFinalSet && isRestPauseFinisher ? `<button type="button" class="btn btn-amber" data-action="start-rest" data-sec="15" data-label="Rest-Pause (${escapeHtml(activeName)})">15s RP</button>` : ''}
@@ -2246,6 +2419,142 @@ function get7DayAdherence() {
   return { proteinDays, stepDays, loggedDays };
 }
 
+function render90DayMatrixCard(todayInfo, series) {
+  const startBase = new Date(`${state.startDate || PLAN_CONFIG.startDate}T12:00:00Z`);
+  const workoutDates = new Set(state.workoutHistory.map((h) => h.date));
+  const weightByDate = new Map(state.weightLogs.map((w) => [w.date, w.weight]));
+  const currentDay = Math.max(1, Math.min(90, todayInfo.dayNum));
+  const activeDay = selectedMatrixDay && selectedMatrixDay >= 1 && selectedMatrixDay <= 90 ? selectedMatrixDay : currentDay;
+
+  const days = [];
+  for (let d = 1; d <= 90; d++) {
+    const dt = new Date(startBase.getTime());
+    dt.setUTCDate(dt.getUTCDate() + (d - 1));
+    const iso = dt.toISOString().slice(0, 10);
+    const entry = state.dailyLogs[iso];
+    const hasLift = workoutDates.has(iso);
+    const hasProtein = Boolean(entry && NUTRITION.meals.every((m) => entry.meals?.[m.id]));
+    const weight = weightByDate.get(iso) ?? null;
+    const isDeload = d >= 43 && d <= 49;
+    const isFuture = d > currentDay;
+    let cls = '';
+    if (hasLift && hasProtein) cls = 'is-dual';
+    else if (hasLift) cls = 'is-lift';
+    else if (hasProtein || weight !== null) cls = 'is-fuel';
+    else if (isDeload && isFuture) cls = 'is-deload-future';
+    days.push({ day: d, iso, hasLift, hasProtein, weight, isDeload, isFuture, cls });
+  }
+
+  const picked = days[activeDay - 1];
+  let velocityHtml = '';
+  if (series.length >= 2) {
+    const first = series[0];
+    const last = series[series.length - 1];
+    const spanDays = Math.max(1, Math.round((new Date(`${last.date}T12:00:00Z`) - new Date(`${first.date}T12:00:00Z`)) / 86400000));
+    if (spanDays >= 7) {
+      // Compare latest 7d avg against point closest to 7–14 days prior
+      const targetMs = new Date(`${last.date}T12:00:00Z`).getTime() - 7 * 86400000;
+      let ref = series[0];
+      for (const pt of series) {
+        const ptMs = new Date(`${pt.date}T12:00:00Z`).getTime();
+        if (ptMs <= targetMs) ref = pt;
+      }
+      const refSpan = Math.max(1, Math.round((new Date(`${last.date}T12:00:00Z`) - new Date(`${ref.date}T12:00:00Z`)) / 86400000));
+      const rate = Number((((last.rollingAvg - ref.rollingAvg) / refSpan) * 7).toFixed(2));
+      // Map [-1.5, +0.5] to [0%, 100%] (sweet spot -1.0..-0.5 => 25%..50%)
+      const pct = Math.max(2, Math.min(98, ((rate + 1.5) / 2.0) * 100));
+      const inSweet = rate >= -1.0 && rate <= -0.5;
+      const statusText = inSweet
+        ? `${rate} lb/wk · Sweet Spot`
+        : rate < -1.0
+          ? `${rate} lb/wk · Faster Cut`
+          : `${rate >= 0 ? '+' : ''}${rate} lb/wk · Slower / Maint.`;
+      const markerCls = inSweet ? '' : rate < -1.15 || rate > 0.1 ? 'is-warn' : 'is-info';
+      velocityHtml = `
+        <div class="velocity-box">
+          <div class="row-between">
+            <span style="font-weight:700;font-size:0.8125rem;">Recomp Velocity</span>
+            <span class="tabular ${inSweet ? 'text-success' : 'text-info'}" style="font-size:0.8125rem;font-weight:700;">${statusText}</span>
+          </div>
+          <div class="velocity-labels tabular">
+            <span>-1.5</span>
+            <span class="text-info" style="font-weight:700;">Target (-1.0 to -0.5)</span>
+            <span>+0.5</span>
+          </div>
+          <div class="velocity-track" aria-label="Weight velocity ${statusText}">
+            <div class="velocity-sweet-band" aria-hidden="true"></div>
+            <div class="velocity-marker ${markerCls}" style="left:${pct.toFixed(1)}%;"></div>
+          </div>
+        </div>
+      `;
+    } else {
+      velocityHtml = `
+        <div class="velocity-box">
+          <div class="row-between">
+            <span style="font-weight:700;font-size:0.8125rem;">Recomp Velocity</span>
+            <span class="muted-sm tabular">Calibrating (${spanDays}/7 days)</span>
+          </div>
+          <div class="velocity-labels tabular">
+            <span>-1.5</span>
+            <span class="text-info" style="font-weight:700;">Sweet Spot (-1.0 to -0.5 lb/wk)</span>
+            <span>+0.5</span>
+          </div>
+          <div class="velocity-track" aria-hidden="true">
+            <div class="velocity-sweet-band"></div>
+          </div>
+        </div>
+      `;
+    }
+  } else {
+    velocityHtml = `
+      <div class="velocity-box">
+        <div class="row-between">
+          <span style="font-weight:700;font-size:0.8125rem;">Recomp Velocity</span>
+          <span class="muted-sm">Log 7 days of weigh-ins to unlock rate gauge</span>
+        </div>
+      </div>
+    `;
+  }
+
+  return `
+    <section class="card">
+      <div class="card-header card-header-inline">
+        <div style="min-width:0;">
+          <h2 class="card-title">90-Day Phase Matrix</h2>
+          <p class="card-meta">Phase 1 (D1–42) · Wk 7 Deload (D43–49) · Phase 2 (D50–90)</p>
+        </div>
+        <span class="tag tag-info tabular">Day ${currentDay}/90</span>
+      </div>
+
+      <div class="phase-matrix-grid" role="group" aria-label="90-day consistency matrix">
+        ${days.map((d) => `
+          <button type="button" class="phase-matrix-cell ${d.cls} ${d.day === currentDay ? 'is-today' : ''} ${d.day === activeDay && d.day !== currentDay ? 'is-picked' : ''}"
+            data-action="select-matrix-day" data-day="${d.day}"
+            aria-label="Day ${d.day} (${formatHumanDate(d.iso)})" title="Day ${d.day} · ${formatHumanDate(d.iso)}"></button>
+        `).join('')}
+      </div>
+
+      <div class="matrix-legend">
+        <span class="matrix-legend-item"><span class="matrix-swatch sw-dual"></span>Lift + 4/4 P</span>
+        <span class="matrix-legend-item"><span class="matrix-swatch sw-lift"></span>Lift</span>
+        <span class="matrix-legend-item"><span class="matrix-swatch sw-fuel"></span>Fuel / Weigh-In</span>
+        <span class="matrix-legend-item"><span class="matrix-swatch sw-deload"></span>Wk 7 Deload</span>
+      </div>
+
+      ${picked ? `
+        <div class="matrix-readout">
+          <strong>Day ${picked.day} · ${escapeHtml(formatHumanDate(picked.iso))}${picked.isDeload ? ' (Deload)' : ''}</strong>
+          <span class="muted-sm tabular">
+            ${picked.hasLift ? 'Lift ✓' : 'No lift'} · ${picked.hasProtein ? '4/4 P ✓' : 'Protein —'}${picked.weight !== null ? ` · ${picked.weight} lb` : ''}
+          </span>
+        </div>
+      ` : ''}
+
+      ${velocityHtml}
+    </section>
+  `;
+}
+
 function renderProgressView() {
   const { todayInfo } = getEffectivePhase();
   const series = computeRollingAverage(state.weightLogs, 7);
@@ -2293,6 +2602,8 @@ function renderProgressView() {
           : ''}
       </section>
     ` : ''}
+
+    ${render90DayMatrixCard(todayInfo, series)}
 
     <section class="card">
       <div class="card-header card-header-inline">
@@ -3057,6 +3368,71 @@ function renderMain({ overrideExpandedIds = null } = {}) {
   else if (state.activeTab === 'progress') main.innerHTML = renderProgressView();
   else main.innerHTML = renderPlanView();
   justCheckedTarget = null;
+  lastStampedKey = null;
+}
+
+function syncLiveRackScoreboardDom(exId, idx, row, ex) {
+  const key = `${exId}_${idx}`;
+  const wNum = Number(row.weight) || 0;
+  const rNum = Number(row.reps) || ex.repMin;
+
+  const inputEl = document.querySelector(`[data-caliper-input="${key}"]`);
+  if (inputEl && document.activeElement !== inputEl) {
+    inputEl.value = row.weight === '' ? '' : String(row.weight);
+  }
+
+  const ticketEl = document.querySelector(`[data-ticket-val-for="${key}"]`);
+  if (ticketEl) {
+    ticketEl.textContent = `${row.weight || 'BW'}×${rNum}`;
+  }
+
+  const deltaEl = document.querySelector(`[data-weight-delta-for="${key}"]`);
+  if (deltaEl) {
+    const prevW = Number(deltaEl.dataset.prevWeight);
+    const prevR = deltaEl.dataset.prevReps;
+    if (Number.isFinite(prevW) && prevW > 0 && wNum > 0) {
+      const diff = Number((wNum - prevW).toFixed(1));
+      if (diff > 0) {
+        deltaEl.textContent = `+${diff} vs last ↑`;
+        deltaEl.style.color = 'var(--success)';
+      } else if (diff < 0) {
+        deltaEl.textContent = `${diff} vs last`;
+        deltaEl.style.color = 'var(--amber)';
+      } else {
+        deltaEl.textContent = prevR ? `= last (${prevW}×${prevR})` : '= last';
+        deltaEl.style.color = 'var(--info)';
+      }
+    } else {
+      deltaEl.textContent = wNum > 0 ? 'Working load' : 'Bodyweight';
+      deltaEl.style.color = 'var(--text-muted)';
+    }
+  }
+
+  const repValEl = document.querySelector(`[data-rep-val-for="${key}"]`);
+  if (repValEl) repValEl.textContent = String(rNum);
+
+  const repZoneEl = document.querySelector(`[data-rep-zone-for="${key}"]`);
+  if (repZoneEl) {
+    const repMin = Number(repZoneEl.dataset.repMin) || ex.repMin;
+    const repMax = Number(repZoneEl.dataset.repMax) || ex.repMax;
+    if (rNum >= repMax) {
+      repZoneEl.textContent = 'TOP OF RANGE';
+      repZoneEl.className = 'rack-zone-pill zone-top';
+    } else if (rNum >= repMin) {
+      repZoneEl.textContent = `TARGET ${repMin}–${repMax}`;
+      repZoneEl.className = 'rack-zone-pill zone-in';
+    } else {
+      repZoneEl.textContent = `BELOW ${repMin}`;
+      repZoneEl.className = 'rack-zone-pill zone-low';
+    }
+  }
+
+  const labelEl = document.querySelector(`[data-log-label-for="${key}"]`);
+  if (labelEl) {
+    labelEl.textContent = row.done
+      ? `Re-Stamp Set ${idx + 1} · ${row.weight || 'BW'} × ${rNum}`
+      : `Stamp Set ${idx + 1}${ex.leftFirst ? ' (L→R)' : ''} · ${row.weight || 'BW'} × ${rNum}`;
+  }
 }
 
 function prefersReducedMotion() {
@@ -3104,6 +3480,9 @@ document.addEventListener('click', (e) => {
 
   const target = e.target.closest('[data-action]');
   if (!target) return;
+  if (Date.now() < suppressClickUntil && ['nudge-weight', 'nudge-reps', 'nudge-quick-metric'].includes(target.dataset.action)) {
+    return;
+  }
   const action = target.dataset.action;
 
   if (action === 'shift-date') {
@@ -3358,6 +3737,24 @@ document.addEventListener('click', (e) => {
   } else if (action === 'select-chart-point') {
     selectedChartIdx = Number(target.dataset.idx);
     renderMain();
+  } else if (action === 'select-matrix-day') {
+    selectedMatrixDay = Number(target.dataset.day);
+    renderMain();
+  } else if (action === 'open-rest-hud') {
+    if (timer.active) setRestHudOpen(true);
+    else openRestPresetsModal();
+  } else if (action === 'close-rest-hud') {
+    setRestHudOpen(false);
+  } else if (action === 'rest-hud-adjust') {
+    adjustRestTimer(Number(target.dataset.delta) || 15);
+  } else if (action === 'rest-hud-toggle') {
+    toggleRestTimerPause();
+  } else if (action === 'rest-hud-done') {
+    stopRestTimer();
+  } else if (action === 'rest-hud-preset') {
+    unlockAudio();
+    startRestTimer(Number(target.dataset.sec) || 90, timer.label || 'Rest');
+    renderRestHud();
   } else if (action === 'reset-session') {
     const workoutId = state.activeWorkoutId;
     const prevDraft = state.draftWorkouts[workoutId] ? structuredClone(state.draftWorkouts[workoutId]) : null;
@@ -3697,6 +4094,7 @@ document.addEventListener('click', (e) => {
       msgs.push('Today → Lifting Day');
     }
     if (msgs.length > 0) showToast(msgs.join(' · '));
+    lastStampedKey = `${draft.activeExId}_${draft.activeSetIdxByEx?.[draft.activeExId] ?? 0}`;
     if (switchedExercise) {
       renderMain({ overrideExpandedIds: prevExpandedIds });
       window.scrollTo(0, prevScrollY);
@@ -4133,6 +4531,7 @@ document.addEventListener('click', (e) => {
       pendingWaistInput = null;
       expandedHistoryId = null;
       selectedChartIdx = null;
+      selectedMatrixDay = null;
       openWhyByEx = {};
       saveState();
       renderMain();
@@ -4173,14 +4572,10 @@ document.addEventListener('input', (e) => {
         if (labelEl) {
           const rNum = Number(row.reps) || ex.repMin;
           labelEl.textContent = row.done
-            ? `Re-Log Set ${idx + 1} (${row.weight || 'BW'} × ${rNum})`
-            : `Log Set ${idx + 1}${ex.leftFirst ? ' (L→R)' : ''} · ${row.weight || 'BW'} × ${rNum}`;
+            ? `Re-Stamp Set ${idx + 1} · ${row.weight || 'BW'} × ${rNum}`
+            : `Stamp Set ${idx + 1}${ex.leftFirst ? ' (L→R)' : ''} · ${row.weight || 'BW'} × ${rNum}`;
         }
-        const plateEl = document.querySelector(`[data-plate-for="${exId}_${idx}"]`);
-        if (plateEl) {
-          const plates = computeBarbellPlatesPerSide(Number(row.weight) || 0);
-          plateEl.innerHTML = renderBarbellPlateChips(plates);
-        }
+        syncLiveRackScoreboardDom(exId, idx, row, ex);
       }
     }
   } else if (action === 'update-daily-num') {
@@ -4222,6 +4617,7 @@ document.addEventListener('change', (e) => {
         pendingWaistInput = null;
         expandedHistoryId = null;
         selectedChartIdx = null;
+        selectedMatrixDay = null;
         openWhyByEx = {};
         lastSavedBanner = null;
         saveState();
@@ -4284,6 +4680,7 @@ document.addEventListener('click', (e) => {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     setThemeMenuOpen(false);
+    setRestHudOpen(false);
     closeModal();
   }
 });
@@ -4292,7 +4689,7 @@ document.getElementById('modal-close').addEventListener('click', closeModal);
 document.getElementById('modal-backdrop').addEventListener('click', (e) => {
   if (e.target.id === 'modal-backdrop') closeModal();
 });
-document.getElementById('rest-alert-mode').addEventListener('click', () => {
+function handleCycleRestAlertMode() {
   unlockAudio();
   if (!supportsVibration()) {
     const nextOn = !isChimeEnabled();
@@ -4322,11 +4719,195 @@ document.getElementById('rest-alert-mode').addEventListener('click', () => {
     playTimerDoneFeedback({ forceChime: true, volume: 0.75, skipVibe: true });
   }
   showToast(msgMap[state.restAlertMode] || 'Rest alert updated');
-});
+}
+document.getElementById('rest-alert-mode').addEventListener('click', handleCycleRestAlertMode);
+document.getElementById('rest-hud-alert')?.addEventListener('click', handleCycleRestAlertMode);
 document.getElementById('rest-minus').addEventListener('click', () => adjustRestTimer(-15));
 document.getElementById('rest-plus').addEventListener('click', () => adjustRestTimer(15));
 document.getElementById('rest-toggle').addEventListener('click', toggleRestTimerPause);
 document.getElementById('rest-stop').addEventListener('click', stopRestTimer);
+
+// ---------- Vernier Caliper Drag & Press-and-Hold Steppers ----------
+(function initCaliperAndHoldInteractions() {
+  let caliperSession = null;
+
+  document.addEventListener('pointerdown', (e) => {
+    const track = e.target.closest('[data-caliper-track]');
+    if (!track) return;
+    const exId = track.dataset.ex;
+    const idx = Number(track.dataset.idx);
+    const step = Number(track.dataset.step) || 5;
+    const draft = ensureWorkoutDraft(state.activeWorkoutId);
+    const row = draft.sets[exId]?.[idx];
+    const ex = getWorkouts()[state.activeWorkoutId]?.exercises?.find((x) => x.id === exId);
+    if (!row || !ex) return;
+
+    const startW = Number(row.weight) || 0;
+    caliperSession = {
+      track,
+      ticksEl: track.querySelector('.caliper-ticks-inner'),
+      badgeEl: track.querySelector('[data-caliper-badge]'),
+      exId,
+      idx,
+      step,
+      row,
+      ex,
+      startX: e.clientX,
+      startW,
+      lastW: startW,
+      moved: false,
+      pointerId: e.pointerId
+    };
+    track.classList.add('is-dragging');
+    try { track.setPointerCapture(e.pointerId); } catch {}
+  });
+
+  document.addEventListener('pointermove', (e) => {
+    if (!caliperSession || e.pointerId !== caliperSession.pointerId) return;
+    const dx = e.clientX - caliperSession.startX;
+    if (Math.abs(dx) > 4) caliperSession.moved = true;
+    const steps = Math.round(dx / 14);
+    const rawNext = Math.max(0, caliperSession.startW + steps * caliperSession.step);
+    const nextW = Number(rawNext.toFixed(1));
+
+    if (caliperSession.ticksEl) {
+      const shift = ((dx % 28) + 28) % 28 - 14;
+      caliperSession.ticksEl.style.transform = `translate3d(${shift.toFixed(1)}px, 0, 0)`;
+    }
+
+    if (nextW !== caliperSession.lastW) {
+      caliperSession.lastW = nextW;
+      caliperSession.row.weight = nextW === 0 ? '' : String(nextW);
+      caliperSession.row.weightEdited = true;
+      caliperSession.track.setAttribute('aria-valuenow', String(nextW));
+      const diff = Number((nextW - caliperSession.startW).toFixed(1));
+      if (caliperSession.badgeEl) {
+        caliperSession.badgeEl.textContent = diff === 0
+          ? `${nextW || 'BW'} lb`
+          : `${diff > 0 ? '+' : ''}${diff} lb → ${nextW || 'BW'}`;
+      }
+      syncLiveRackScoreboardDom(caliperSession.exId, caliperSession.idx, caliperSession.row, caliperSession.ex);
+    }
+  });
+
+  function finishCaliper() {
+    if (!caliperSession) return;
+    const { track, ticksEl, badgeEl, step, moved, lastW, startW } = caliperSession;
+    track.classList.remove('is-dragging');
+    if (ticksEl) ticksEl.style.transform = '';
+    if (badgeEl) badgeEl.textContent = `◂ drag ±${step} lb ▸`;
+    caliperSession = null;
+    if (moved && lastW !== startW) {
+      saveState();
+      renderMain();
+    }
+  }
+
+  window.addEventListener('pointerup', finishCaliper);
+  window.addEventListener('pointercancel', finishCaliper);
+
+  // Keyboard accessibility for Vernier Caliper slider
+  document.addEventListener('keydown', (e) => {
+    const track = e.target.closest?.('[data-caliper-track]');
+    if (!track) return;
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    const exId = track.dataset.ex;
+    const idx = Number(track.dataset.idx);
+    const step = Number(track.dataset.step) || 5;
+    const draft = ensureWorkoutDraft(state.activeWorkoutId);
+    const row = draft.sets[exId]?.[idx];
+    if (!row) return;
+    const dir = e.key === 'ArrowRight' ? 1 : -1;
+    const nextW = Math.max(0, Number(((Number(row.weight) || 0) + dir * step).toFixed(1)));
+    row.weight = nextW === 0 ? '' : String(nextW);
+    row.weightEdited = true;
+    saveState();
+    renderMain();
+    document.querySelector(`[data-caliper-track][data-ex="${exId}"][data-idx="${idx}"]`)?.focus();
+  });
+
+  // Press-and-hold repeating steppers (nudge-weight, nudge-reps, nudge-quick-metric)
+  let holdTimer = null;
+  let holdInterval = null;
+  let holdFiredCount = 0;
+  let holdActionType = null;
+
+  function performHoldStep(btn) {
+    const action = btn.dataset.action;
+    if (action === 'nudge-weight') {
+      const exId = btn.dataset.ex;
+      const idx = Number(btn.dataset.idx);
+      const delta = Number(btn.dataset.delta);
+      const draft = ensureWorkoutDraft(state.activeWorkoutId);
+      const row = draft.sets[exId]?.[idx];
+      const ex = getWorkouts()[state.activeWorkoutId]?.exercises?.find((x) => x.id === exId);
+      if (!row || !ex) return;
+      const nextW = Math.max(0, Number(((Number(row.weight) || 0) + delta).toFixed(1)));
+      row.weight = nextW === 0 ? '' : String(nextW);
+      row.weightEdited = true;
+      syncLiveRackScoreboardDom(exId, idx, row, ex);
+    } else if (action === 'nudge-reps') {
+      const exId = btn.dataset.ex;
+      const idx = Number(btn.dataset.idx);
+      const delta = Number(btn.dataset.delta);
+      const draft = ensureWorkoutDraft(state.activeWorkoutId);
+      const row = draft.sets[exId]?.[idx];
+      const ex = getWorkouts()[state.activeWorkoutId]?.exercises?.find((x) => x.id === exId);
+      if (!row || !ex) return;
+      row.reps = String(Math.max(1, (Number(row.reps) || 1) + delta));
+      syncLiveRackScoreboardDom(exId, idx, row, ex);
+    } else if (action === 'nudge-quick-metric') {
+      const metric = btn.dataset.metric;
+      const delta = Number(btn.dataset.delta);
+      if (metric === 'weight' || metric === 'quick-weight') {
+        const input = document.getElementById(metric === 'quick-weight' ? 'quick-weight-val' : 'weight-val-input');
+        const curr = Number(input?.value ?? pendingWeightInput ?? 185);
+        pendingWeightInput = Number(Math.max(70, Math.min(450, curr + delta)).toFixed(1));
+        if (input) input.value = pendingWeightInput.toFixed(1);
+      } else if (metric === 'waist') {
+        const input = document.getElementById('waist-val-input');
+        const curr = Number(input?.value ?? pendingWaistInput ?? 34);
+        pendingWaistInput = Number(Math.max(20, Math.min(70, curr + delta)).toFixed(2));
+        if (input) input.value = String(pendingWaistInput);
+      }
+    }
+  }
+
+  function clearHold() {
+    clearTimeout(holdTimer);
+    clearInterval(holdInterval);
+    holdTimer = null;
+    holdInterval = null;
+    if (holdFiredCount > 0) {
+      suppressClickUntil = Date.now() + 260;
+      if (holdActionType === 'nudge-weight' || holdActionType === 'nudge-reps') {
+        saveState();
+        renderMain();
+      }
+    }
+    holdFiredCount = 0;
+    holdActionType = null;
+  }
+
+  document.addEventListener('pointerdown', (e) => {
+    const btn = e.target.closest('[data-action="nudge-weight"], [data-action="nudge-reps"], [data-action="nudge-quick-metric"]');
+    if (!btn) return;
+    clearHold();
+    holdActionType = btn.dataset.action;
+    holdTimer = setTimeout(() => {
+      holdFiredCount += 1;
+      performHoldStep(btn);
+      holdInterval = setInterval(() => {
+        holdFiredCount += 1;
+        performHoldStep(btn);
+      }, 95);
+    }, 360);
+  });
+
+  window.addEventListener('pointerup', clearHold);
+  window.addEventListener('pointercancel', clearHold);
+})();
 
 // Handle overnight date rollover, timer re-sync, and wake lock on foreground
 document.addEventListener('visibilitychange', () => {

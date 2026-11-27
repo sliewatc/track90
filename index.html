@@ -14,7 +14,7 @@
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@500;600;700&family=Geist:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=DM+Sans:ital,opsz,wght@0,9..40,400..700;1,9..40,400..700&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
@@ -58,9 +58,14 @@
     <div class="rest-dock-head">
       <div class="rest-dock-info">
         <div class="rest-ex-name" id="rest-ex-name">Rest Timer</div>
-        <button type="button" class="rest-time-btn tabular" id="rest-countdown" data-action="open-rest-presets" title="Tap for quick rest presets">01:30</button>
+        <button type="button" class="rest-time-btn display-num" id="rest-countdown" data-action="open-rest-hud" title="Expand floor-readable Rest HUD">01:30</button>
       </div>
-      <button type="button" class="btn btn-sm rest-chime-btn" id="rest-alert-mode" aria-pressed="true" title="Toggle rest chime"></button>
+      <div class="rest-dock-head-actions">
+        <button type="button" class="btn btn-sm rest-chime-btn" id="rest-alert-mode" aria-pressed="true" title="Toggle rest chime"></button>
+        <button type="button" class="btn btn-sm btn-icon" id="rest-expand" data-action="open-rest-hud" aria-label="Expand full rest timer" title="Expand Rest HUD">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+        </button>
+      </div>
     </div>
     <div class="rest-dock-controls">
       <button type="button" class="btn btn-sm" id="rest-minus">-15s</button>
@@ -69,6 +74,50 @@
       <button type="button" class="btn btn-sm btn-ghost" id="rest-stop">Done</button>
     </div>
   </aside>
+
+  <!-- Floor-Readable Full-Presence Rest HUD -->
+  <div id="rest-hud" class="rest-hud hidden" role="dialog" aria-modal="true" aria-label="Full screen rest timer">
+    <div class="rest-hud-inner">
+      <div class="rest-hud-top">
+        <div class="rest-hud-title-wrap">
+          <span class="rest-hud-status-dot" aria-hidden="true"></span>
+          <span class="rest-hud-title" id="rest-hud-title">REST · BENCH PRESS</span>
+        </div>
+        <div class="rest-dock-head-actions">
+          <button type="button" class="btn btn-sm rest-chime-btn" id="rest-hud-alert" aria-pressed="true" title="Toggle rest chime"></button>
+          <button type="button" class="btn btn-sm btn-icon" id="rest-hud-close" data-action="close-rest-hud" aria-label="Minimize rest timer" title="Minimize to dock">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="rest-hud-stage">
+        <div class="rest-hud-kicker" id="rest-hud-kicker">RECOVER BEFORE NEXT SET</div>
+        <div class="rest-hud-time display-num" id="rest-hud-time">01:30</div>
+        <div class="rest-hud-bar-track" aria-hidden="true">
+          <div id="rest-hud-bar" class="bar-fill" style="transform: scaleX(1); background: var(--amber);"></div>
+        </div>
+        <div class="rest-hud-next-card" id="rest-hud-next"></div>
+      </div>
+
+      <div class="rest-hud-footer">
+        <div class="rest-hud-presets" role="group" aria-label="Quick rest presets">
+          <button type="button" class="tap-chip tabular" data-action="rest-hud-preset" data-sec="45">0:45</button>
+          <button type="button" class="tap-chip tabular" data-action="rest-hud-preset" data-sec="60">1:00</button>
+          <button type="button" class="tap-chip tabular" data-action="rest-hud-preset" data-sec="90">1:30</button>
+          <button type="button" class="tap-chip tabular" data-action="rest-hud-preset" data-sec="120">2:00</button>
+          <button type="button" class="tap-chip tabular" data-action="rest-hud-preset" data-sec="150">2:30</button>
+          <button type="button" class="tap-chip tabular" data-action="rest-hud-preset" data-sec="180">3:00</button>
+        </div>
+        <div class="rest-hud-paddles">
+          <button type="button" class="btn rest-hud-paddle" id="rest-hud-minus" data-action="rest-hud-adjust" data-delta="-15">-15s</button>
+          <button type="button" class="btn btn-amber rest-hud-paddle" id="rest-hud-toggle" data-action="rest-hud-toggle">Pause</button>
+          <button type="button" class="btn rest-hud-paddle" id="rest-hud-plus" data-action="rest-hud-adjust" data-delta="15">+15s</button>
+        </div>
+        <button type="button" class="btn btn-primary btn-block rest-hud-ready" data-action="rest-hud-done">Ready Now · Dismiss</button>
+      </div>
+    </div>
+  </div>
 
   <!-- Mobile Bottom Navigation -->
   <nav class="bottom-nav" aria-label="Mobile navigation">
