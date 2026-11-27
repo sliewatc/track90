@@ -3043,7 +3043,7 @@ input[type="number"] {
   }
 }
 
-/* Keep pinned chrome rock-steady with a single opaque snapshot (prevents plus-lighter double exposure) */
+/* Keep pinned chrome rock-steady and layered above main-view during View Transitions */
 ::view-transition-group(root),
 ::view-transition-group(app-header),
 ::view-transition-group(app-bottom-nav),
@@ -3052,6 +3052,12 @@ input[type="number"] {
 ::view-transition-group(main-view) {
   animation: none;
 }
+
+::view-transition-group(main-view) { z-index: 1; }
+::view-transition-group(app-header) { z-index: 30; }
+::view-transition-group(app-rest-dock) { z-index: 40; }
+::view-transition-group(app-bottom-nav) { z-index: 50; }
+::view-transition-group(app-toast) { z-index: 60; }
 
 ::view-transition-old(root),
 ::view-transition-old(app-header),

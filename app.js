@@ -3441,7 +3441,8 @@ function prefersReducedMotion() {
 
 function renderMainWithTransition({ focusMain = false, onSettled = null } = {}) {
   const modalOpen = !document.getElementById('modal-backdrop')?.classList.contains('hidden');
-  if (!document.startViewTransition || modalOpen) {
+  const scrolled = window.scrollY > 4;
+  if (!document.startViewTransition || modalOpen || restHudOpen || scrolled) {
     renderMain();
     if (focusMain) document.getElementById('main-view')?.focus({ preventScroll: true });
     if (typeof onSettled === 'function') onSettled();
@@ -3679,7 +3680,7 @@ document.addEventListener('click', (e) => {
     const exId = target.dataset.ex;
     draft.rampOpen[exId] = !draft.rampOpen[exId];
     saveState();
-    renderMainWithTransition();
+    renderMain();
   } else if (action === 'toggle-ramp-set') {
     const draft = ensureWorkoutDraft(state.activeWorkoutId);
     const key = target.dataset.key;
@@ -3772,20 +3773,17 @@ document.addEventListener('click', (e) => {
     unlockAudio();
     const draft = ensureWorkoutDraft(state.activeWorkoutId);
     if (!draft.startedAt) draft.startedAt = Date.now();
-    const wasCollapsed = Boolean((draft.prehabDone.ext && draft.prehabDone.pullapart) || draft.prehabSkipped);
     const k = target.dataset.key;
     draft.prehabDone[k] = !draft.prehabDone[k];
     if (draft.prehabDone[k]) draft.prehabSkipped = false;
     justCheckedTarget = draft.prehabDone[k] ? `prehab:${k}` : null;
-    const isCollapsed = Boolean((draft.prehabDone.ext && draft.prehabDone.pullapart) || draft.prehabSkipped);
     saveState();
-    if (wasCollapsed !== isCollapsed) renderMainWithTransition();
-    else renderMain();
+    renderMain();
   } else if (action === 'toggle-skip-prehab') {
     const draft = ensureWorkoutDraft(state.activeWorkoutId);
     draft.prehabSkipped = !draft.prehabSkipped;
     saveState();
-    renderMainWithTransition();
+    renderMain();
   } else if (action === 'toggle-cond-swap') {
     const draft = ensureWorkoutDraft(state.activeWorkoutId);
     draft.conditioningSwapped = !draft.conditioningSwapped;
@@ -4226,7 +4224,7 @@ document.addEventListener('click', (e) => {
     renderMainWithTransition({ focusMain: true });
   } else if (action === 'dismiss-saved-banner') {
     lastSavedBanner = null;
-    renderMainWithTransition();
+    renderMain();
   } else if (action === 'nudge-quick-metric') {
     const metric = target.dataset.metric;
     const delta = Number(target.dataset.delta);
@@ -4322,7 +4320,7 @@ document.addEventListener('click', (e) => {
   } else if (action === 'toggle-history-expand') {
     const id = target.dataset.id;
     expandedHistoryId = expandedHistoryId === id ? null : id;
-    renderMainWithTransition();
+    renderMain();
   } else if (action === 'open-edit-history-set') {
     const id = target.dataset.id;
     const exIdx = Number(target.dataset.exidx);
@@ -4503,7 +4501,7 @@ document.addEventListener('click', (e) => {
     renderMain();
   } else if (action === 'toggle-full-plan') {
     showFullPlanDoc = !showFullPlanDoc;
-    renderMainWithTransition();
+    renderMain();
   } else if (action === 'copy-plan-md') {
     if (navigator.clipboard?.writeText) {
       navigator.clipboard.writeText(FULL_PLAN_MARKDOWN)
